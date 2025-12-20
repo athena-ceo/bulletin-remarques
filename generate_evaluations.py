@@ -4,15 +4,19 @@ Programme pour générer des remarques de bulletins individualisées
 pour les élèves de CPGE à partir d'un fichier Excel.
 """
 
+from __future__ import annotations
+
 import pandas as pd
 import sys
 import os
-import json
 import logging
 import argparse
-from typing import Dict, List, Optional
-from openai import OpenAI
+from typing import Dict, List, Optional, Tuple
+from openai import OpenAI, APIError as OpenAIAPIError, RateLimitError, APIConnectionError
 from pydantic import BaseModel, Field
+
+from config import APP_CONFIG
+from validators import validate_excel_file
 
 
 class StudentEvaluation(BaseModel):
@@ -23,8 +27,15 @@ class StudentEvaluation(BaseModel):
     )
 
 
-def setup_logging(log_level: str):
-    """Configure le système de logging."""
+def setup_logging(log_level: str) -> None:
+    """Configure le système de logging.
+    
+    Args:
+        log_level: Niveau de log (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        
+    Raises:
+        ValueError: Si le niveau de log est invalide
+    """
     numeric_level = getattr(logging, log_level.upper(), None)
     if not isinstance(numeric_level, int):
         raise ValueError(f"Niveau de log invalide: {log_level}")
@@ -37,7 +48,14 @@ def setup_logging(log_level: str):
 
 
 def get_openai_client() -> OpenAI:
-    """Initialise le client OpenAI."""
+    """Initialise le client OpenAI.
+    
+    Returns:
+        OpenAI: Client OpenAI initialisé
+        
+    Raises:
+        ValueError: Si la clé API n'est pas définie
+    """
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("La variable d'environnement OPENAI_API_KEY n'est pas définie")
@@ -48,7 +66,16 @@ def get_openai_client() -> OpenAI:
 def calculate_general_average(
     cb1: Optional[float], cb2: Optional[float], cb3: Optional[float]
 ) -> Optional[float]:
-    """Calcule la moyenne générale à partir des trois concours blancs."""
+    """Calcule la moyenne générale à partir des trois concours blancs.
+    
+    Args:
+        cb1: Moyenne du concours blanc 1
+        cb2: Moyenne du concours blanc 2
+        cb3: Moyenne du concours blanc 3
+        
+    Returns:
+        La moyenne générale ou None si aucune note valide
+    """
     grades = [g for g in [cb1, cb2, cb3] if g is not None and not pd.isna(g)]
     if not grades:
         return None
@@ -56,7 +83,15 @@ def calculate_general_average(
 
 
 def extract_student_data(row: pd.Series, class_type: str) -> Optional[Dict]:
-    """Extrait les données d'un élève depuis une ligne du DataFrame."""
+    """Extrait les données d'un élève depuis une ligne du DataFrame.
+    
+    Args:
+        row: Ligne du DataFrame pandas contenant les données de l'élève
+        class_type: Type de classe ("ECG2" ou "KE4")
+        
+    Returns:
+        Dictionnaire contenant les données de l'élève, ou None si invalide
+    """
     student_num = row.iloc[0]
     last_name = row.iloc[1]
     first_name = row.iloc[2]
@@ -150,7 +185,14 @@ def extract_student_data(row: pd.Series, class_type: str) -> Optional[Dict]:
 
 
 def format_student_data_for_prompt(student_data: Dict) -> str:
-    """Formate les données de l'élève pour le prompt OpenAI."""
+    """Formate les données de l'élève pour le prompt OpenAI.
+    
+    Args:
+        student_data: Dictionnaire contenant les données de l'élève
+        
+    Returns:
+        Chaîne de caractères formatée pour le prompt
+    """
     logging.debug(
         f"Formatage des données pour {student_data['prenom']} {student_data['nom']}"
     )
@@ -216,9 +258,22 @@ def format_student_data_for_prompt(student_data: Dict) -> str:
 
 
 def generate_evaluation(
-    client: OpenAI, student_data: Dict, model: str = "gpt-5.2", temperature: float = 0.7
+    client: OpenAI, 
+    student_data: Dict, 
+    model: str = APP_CONFIG.DEFAULT_MODEL, 
+    temperature: float = APP_CONFIG.DEFAULT_TEMPERATURE
 ) -> str:
-    """Génère une évaluation pour un élève en utilisant l'API OpenAI."""
+    """Génère une évaluation pour un élève en utilisant l'API OpenAI.
+    
+    Args:
+        client: Client OpenAI initialisé
+        student_data: Dictionnaire contenant les données de l'élève
+        model: Modèle OpenAI à utiliser
+        temperature: Température pour la génération (0.0-1.0)
+        
+    Returns:
+        Remarque de bulletin générée par l'IA
+    """
 
     student_info = format_student_data_for_prompt(student_data)
 
@@ -309,12 +364,27 @@ Génère une remarque de bulletin individualisée en français, dans un style na
         )
         return "[Erreur: réponse invalide - structure inattendue]"
 
+    except RateLimitError as e:
+        error_msg = f"Limite de taux API atteinte pour {student_data['prenom']} {student_data['nom']}"
+        logging.error(error_msg, exc_info=True)
+        return "[Erreur: Limite de taux API atteinte. Veuillez réessayer plus tard.]"
+    
+    except APIConnectionError as e:
+        error_msg = f"Erreur de connexion API pour {student_data['prenom']} {student_data['nom']}"
+        logging.error(error_msg, exc_info=True)
+        return "[Erreur: Impossible de se connecter à l'API OpenAI.]"
+    
+    except OpenAIAPIError as e:
+        error_msg = f"Erreur API OpenAI pour {student_data['prenom']} {student_data['nom']}: {e}"
+        logging.error(error_msg, exc_info=True)
+        return f"[Erreur API: {str(e)[:100]}]"
+    
     except Exception as e:
         logging.error(
-            f"Erreur lors de la génération pour {student_data['prenom']} {student_data['nom']}: {e}",
+            f"Erreur inattendue lors de la génération pour {student_data['prenom']} {student_data['nom']}: {e}",
             exc_info=True,
         )
-        return f"[Erreur lors de la génération de l'évaluation]"
+        return "[Erreur inattendue lors de la génération de l'évaluation]"
 
 
 def process_class(
@@ -322,12 +392,25 @@ def process_class(
     df: pd.DataFrame,
     class_name: str,
     class_type: str,
-    model: str = "gpt-5.2",
-    temperature: float = 0.7,
+    model: str = APP_CONFIG.DEFAULT_MODEL,
+    temperature: float = APP_CONFIG.DEFAULT_TEMPERATURE,
     max_students: Optional[int] = None,
-) -> List[tuple]:
-    """Traite tous les élèves d'une classe et retourne les évaluations avec les noms."""
-    evaluations = []
+) -> List[Tuple[str, str]]:
+    """Traite tous les élèves d'une classe et retourne les évaluations avec les noms.
+    
+    Args:
+        client: Client OpenAI initialisé
+        df: DataFrame pandas contenant les données de la classe
+        class_name: Nom de la classe (ECG2 ou KE4)
+        class_type: Type de classe (ECG2 ou KE4)
+        model: Modèle OpenAI à utiliser
+        temperature: Température pour la génération
+        max_students: Nombre maximum d'élèves à traiter (pour tests)
+        
+    Returns:
+        Liste de tuples (nom_élève, évaluation)
+    """
+    evaluations: List[Tuple[str, str]] = []
     student_count = 0
 
     logging.info(f"Début du traitement de la classe {class_name}")
@@ -362,8 +445,8 @@ def process_class(
     return evaluations
 
 
-def main():
-    """Fonction principale."""
+def main() -> None:
+    """Fonction principale du programme CLI."""
     parser = argparse.ArgumentParser(
         description="Génère des remarques de bulletins individualisées pour les élèves de CPGE"
     )
@@ -373,9 +456,9 @@ def main():
     )
     parser.add_argument(
         "--log-level",
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        help="Niveau de logging (défaut: INFO)",
+        default=APP_CONFIG.DEFAULT_LOG_LEVEL,
+        choices=APP_CONFIG.VALID_LOG_LEVELS,
+        help=f"Niveau de logging (défaut: {APP_CONFIG.DEFAULT_LOG_LEVEL})",
     )
     parser.add_argument(
         "--max-students",
@@ -385,14 +468,15 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="gpt-5.2",
-        help="Modèle OpenAI à utiliser (défaut: gpt-5.2)",
+        default=APP_CONFIG.DEFAULT_MODEL,
+        choices=APP_CONFIG.AVAILABLE_MODELS,
+        help=f"Modèle OpenAI à utiliser (défaut: {APP_CONFIG.DEFAULT_MODEL})",
     )
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.7,
-        help="Température pour la génération (défaut: 0.7)",
+        default=APP_CONFIG.DEFAULT_TEMPERATURE,
+        help=f"Température pour la génération (défaut: {APP_CONFIG.DEFAULT_TEMPERATURE})",
     )
 
     args = parser.parse_args()
@@ -411,11 +495,21 @@ def main():
         logging.error(f"Le fichier {excel_file} n'existe pas.")
         sys.exit(1)
 
+    # Validate Excel file structure
+    logging.info("Validation de la structure du fichier Excel...")
+    is_valid, error_msg, valid_sheets = validate_excel_file(excel_file)
+    if not is_valid:
+        logging.error(f"Validation échouée: {error_msg}")
+        sys.exit(1)
+    
+    logging.info(f"Validation réussie. Onglets valides: {', '.join(valid_sheets)}")
+
     # Initialiser le client OpenAI
     try:
         client = get_openai_client()
     except ValueError as e:
         logging.error(f"Erreur d'initialisation OpenAI: {e}")
+        logging.info("Veuillez définir la variable d'environnement OPENAI_API_KEY")
         sys.exit(1)
 
     # Lire le fichier Excel
@@ -427,12 +521,12 @@ def main():
         logging.error(f"Erreur lors de la lecture du fichier Excel: {e}", exc_info=True)
         sys.exit(1)
 
-    # Traiter chaque classe
+    # Traiter chaque classe (use only validated sheets)
     classes = {"ECG2": "ECG2", "KE4": "KE4"}
 
     for class_name, class_type in classes.items():
-        if class_name not in xl.sheet_names:
-            logging.warning(f"L'onglet {class_name} n'existe pas dans le fichier.")
+        if class_name not in valid_sheets:
+            logging.info(f"L'onglet {class_name} sera ignoré (non validé ou absent)")
             continue
 
         logging.info(f"Début du traitement de la classe {class_name}")
@@ -450,7 +544,7 @@ def main():
         )
 
         # Écrire le fichier de sortie
-        output_file = f"remarques_{class_name}.txt"
+        output_file = APP_CONFIG.OUTPUT_FILE_PATTERN.format(class_name=class_name)
         logging.info(f"Écriture du fichier de sortie: {output_file}")
         with open(output_file, "w", encoding="utf-8") as f:
             for student_name, eval_text in evaluations:

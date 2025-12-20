@@ -2,6 +2,16 @@
 
 Programme Python pour générer des remarques de bulletins individualisées pour les élèves de CPGE à partir d'un fichier Excel.
 
+## ✨ Fonctionnalités
+
+- 📊 Import de données Excel (onglets ECG2 et KE4)
+- 🤖 Génération automatique d'évaluations via OpenAI
+- 🎨 Interface web Streamlit intuitive
+- ✅ Validation automatique des données
+- 💾 Export en formats texte et CSV
+- ⚡ Mise en cache pour performances optimales
+- 🧪 Suite de tests unitaires
+
 ## Installation
 
 1. Activer l'environnement virtuel :
@@ -78,3 +88,55 @@ Le programme génère deux fichiers texte :
 - `remarques_KE4.txt` : Remarques pour les élèves de deuxième année
 
 Chaque fichier contient une remarque par ligne, prête à être copiée-collée dans le logiciel scolaire.
+
+## 🧪 Tests
+
+Exécutez les tests unitaires :
+
+```bash
+pytest
+```
+
+Avec couverture de code :
+
+```bash
+pytest --cov=. --cov-report=html
+```
+
+## 📁 Structure du Projet
+
+```
+bulletin-remarques/
+├── config.py              # Configuration centralisée
+├── exceptions.py          # Exceptions personnalisées
+├── validators.py          # Validation des données Excel
+├── logging_utils.py       # Logging structuré
+├── generate_evaluations.py  # Script CLI principal
+├── streamlit_app.py      # Interface web
+├── tests/                # Tests unitaires
+│   ├── __init__.py
+│   └── test_bulletin.py
+├── requirements.txt      # Dépendances Python
+├── pyproject.toml       # Configuration des tests
+└── TODO.md              # Fonctionnalités futures
+```
+
+## 🔧 Configuration Avancée
+
+### Modèles disponibles
+- `gpt-5.2` (défaut)
+- `gpt-4o-mini`
+- `gpt-4o`
+
+### Paramètres de température
+- `0.0` : Déterministe, reproductible
+- `0.7` : Équilibré (défaut)
+- `1.0` : Créatif, varié
+
+## 🤝 Contribution
+
+Les contributions sont les bienvenues ! Consultez `TODO.md` pour les fonctionnalités planifiées.
+
+## 📝 Licence
+
+Voir le fichier LICENSE pour plus de détails.

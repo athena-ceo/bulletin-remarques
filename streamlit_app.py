@@ -4,19 +4,22 @@ Streamlit UI pour générer des remarques de bulletins individualisées
 pour les élèves de CPGE à partir d'un fichier Excel.
 """
 
+from __future__ import annotations
+
 import streamlit as st
 import pandas as pd
 import os
-import tempfile
+import logging
 from typing import Dict, List, Optional, Tuple
 from openai import OpenAI
-from pydantic import BaseModel, Field
-import logging
 
 # Import functions from generate_evaluations module
 import importlib.util
 import sys
 from pathlib import Path
+
+from config import APP_CONFIG
+from validators import validate_excel_structure
 
 # Load generate_evaluations module
 spec = importlib.util.spec_from_file_location(
@@ -59,8 +62,17 @@ if "show_results" not in st.session_state:
 
 
 def initialize_results_table(df: pd.DataFrame, class_name: str, class_type: str) -> pd.DataFrame:
-    """Crée un DataFrame vide avec tous les noms d'élèves pour affichage immédiat."""
-    student_names = []
+    """Crée un DataFrame vide avec tous les noms d'élèves pour affichage immédiat.
+    
+    Args:
+        df: DataFrame source contenant les données des élèves
+        class_name: Nom de la classe
+        class_type: Type de classe ("ECG2" ou "KE4")
+        
+    Returns:
+        DataFrame avec colonnes "Élève" et "Remarque"
+    """
+    student_names: List[str] = []
     rows_list = list(df.iterrows())
     
     for _, row in rows_list:
@@ -77,6 +89,24 @@ def initialize_results_table(df: pd.DataFrame, class_name: str, class_type: str)
     results_df.index = range(1, len(results_df) + 1)
     
     return results_df
+
+
+@st.cache_data(ttl=3600)
+def get_student_count(df: pd.DataFrame, class_type: str) -> Dict[str, int]:
+    """Cache student count calculation.
+    
+    Args:
+        df: DataFrame contenant les données des élèves
+        class_type: Type de classe ("ECG2" ou "KE4")
+        
+    Returns:
+        Dictionnaire avec total et nombre d'élèves valides
+    """
+    valid_count = sum(
+        1 for _, row in df.iterrows()
+        if extract_student_data(row, class_type) is not None
+    )
+    return {"total": len(df), "valid": valid_count}
 
 
 def process_one_student(
@@ -114,23 +144,47 @@ def process_one_student(
     
     # Update the results dataframe immediately for each student
     if class_name in st.session_state.results_dataframes:
-        results_df = st.session_state.results_dataframes[class_name].copy()
+        # Avoid unnecessary .copy() - directly update
+        results_df = st.session_state.results_dataframes[class_name]
         # Find the row for this student and update it
         mask = results_df["Élève"] == student_name
         if mask.any():
             results_df.loc[mask, "Remarque"] = evaluation
-        st.session_state.results_dataframes[class_name] = results_df
     
     is_complete = (current_idx + 1 >= total_students) or (max_students and len(evaluations) >= max_students)
     
     return (student_name, evaluation), current_idx + 1, is_complete
 
 
-def main():
+def main() -> None:
+    """Fonction principale de l'application Streamlit."""
     st.title("📝 Génération de Remarques de Bulletins")
     st.markdown(
         "Téléchargez votre fichier Excel avec les notes des élèves pour générer des remarques individualisées."
     )
+    
+    # Add custom CSS for better styling
+    st.markdown("""
+    <style>
+        .stProgress > div > div > div > div {
+            background-color: #00cc88;
+        }
+        .success-message {
+            padding: 1rem;
+            border-radius: 0.5rem;
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .info-box {
+            padding: 1rem;
+            border-radius: 0.5rem;
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+    </style>
+    """, unsafe_allow_html=True)
     
     # FIRST: Display any ongoing generation progress at the top
     if any(st.session_state.generating.values()):
@@ -220,7 +274,7 @@ def main():
         st.header("⚙️ Configuration")
 
         # API Key - get from secrets or environment, don't display in UI
-        api_key = None
+        api_key: Optional[str] = None
         
         # Try Streamlit secrets first
         try:
@@ -240,9 +294,9 @@ def main():
                 st.info("💡 Configurez votre clé API OpenAI via:\n- Streamlit secrets (`.streamlit/secrets.toml`)\n- Variable d'environnement `OPENAI_API_KEY`")
 
         if api_key:
-            os.environ["OPENAI_API_KEY"] = api_key
             try:
-                st.session_state.client = get_openai_client()
+                # Pass API key directly without mutating os.environ
+                st.session_state.client = OpenAI(api_key=api_key)
             except Exception as e:
                 st.error(f"Erreur d'initialisation du client: {e}")
                 st.session_state.client = None
@@ -254,7 +308,7 @@ def main():
         # Model selection
         model = st.selectbox(
             "Modèle",
-            ["gpt-5.2", "gpt-4o-mini", "gpt-4o"],
+            APP_CONFIG.AVAILABLE_MODELS,
             index=0,
             help="Modèle OpenAI à utiliser",
         )
@@ -262,10 +316,10 @@ def main():
         # Temperature slider
         temperature = st.slider(
             "Température",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.7,
-            step=0.1,
+            min_value=APP_CONFIG.MIN_TEMPERATURE,
+            max_value=APP_CONFIG.MAX_TEMPERATURE,
+            value=APP_CONFIG.DEFAULT_TEMPERATURE,
+            step=APP_CONFIG.TEMPERATURE_STEP,
             help="Contrôle la créativité des réponses (0.0 = déterministe, 1.0 = créatif)",
         )
 
@@ -283,7 +337,7 @@ def main():
             max_students = st.number_input(
                 "Nombre d'élèves à traiter",
                 min_value=1,
-                value=5,
+                value=APP_CONFIG.DEFAULT_TEST_LIMIT,
                 step=1,
                 help="Nombre d'élèves à traiter pour ce test",
                 key="max_students_input",
@@ -365,12 +419,16 @@ def main():
                 for sheet_name in ["ECG2", "KE4"]:
                     if sheet_name in xl.sheet_names:
                         df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
+                        
+                        # Validate Excel structure
+                        is_valid, error_msg = validate_excel_structure(df, sheet_name)
+                        if not is_valid:
+                            st.error(f"❌ Erreur de validation pour {sheet_name}: {error_msg}")
+                            continue
+                        
                         st.session_state.excel_data[sheet_name] = df
                         st.session_state.evaluations[sheet_name] = []
                         # Initialize results table with all student names immediately
-                        results_df = initialize_results_table(df, sheet_name, sheet_name)
-                        st.session_state.results_dataframes[sheet_name] = results_df
-                        # Initialize results table with all student names
                         results_df = initialize_results_table(df, sheet_name, sheet_name)
                         st.session_state.results_dataframes[sheet_name] = results_df
 
@@ -405,13 +463,9 @@ def main():
                 with col1:
                     st.metric("Nombre d'élèves", len(df))
                 with col2:
-                    # Count students with valid names
-                    valid_students = sum(
-                        1
-                        for _, row in df.iterrows()
-                        if extract_student_data(row, class_selection) is not None
-                    )
-                    st.metric("Élèves valides", valid_students)
+                    # Use cached student count
+                    stats = get_student_count(df, class_selection)
+                    st.metric("Élèves valides", stats["valid"])
                 with col3:
                     if st.session_state.evaluations.get(class_selection):
                         st.metric(
@@ -419,12 +473,8 @@ def main():
                             len(st.session_state.evaluations[class_selection]),
                         )
 
-                # Display dataframe
-                # Convert dataframe to string representation to handle mixed types (numbers and "absent")
-                df_display = df.copy()
-                # Convert all columns to string to avoid PyArrow serialization issues
-                for col in df_display.columns:
-                    df_display[col] = df_display[col].astype(str).replace('nan', '')
+                # Display dataframe - optimize conversion to string
+                df_display = df.astype(str).replace('nan', '', regex=False)
                 st.dataframe(df_display, width='stretch', height=400)
 
                 # Show existing evaluations if any
