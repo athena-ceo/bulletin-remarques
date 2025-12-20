@@ -1,0 +1,15 @@
+# Cursor Rules for Python Development
+
+## Type Hints
+- All Python code should include type hints by default
+- Use type hints for function parameters, return types, and variable annotations where appropriate
+- Prefer `typing` module types (e.g., `List`, `Dict`, `Optional`, `Union`) for complex types
+- Use `from __future__ import annotations` if needed for forward references
+- Type hints should be comprehensive but not overly verbose
+
+## Code Style
+- Follow PEP 8 style guidelines
+- Use meaningful variable and function names
+- Add docstrings for functions, classes, and modules
+- Keep functions focused and single-purpose
+
