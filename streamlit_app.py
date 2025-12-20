@@ -23,8 +23,7 @@ from validators import validate_excel_structure
 
 # Load generate_evaluations module
 spec = importlib.util.spec_from_file_location(
-    "generate_evaluations", 
-    Path(__file__).parent / "generate_evaluations.py"
+    "generate_evaluations", Path(__file__).parent / "generate_evaluations.py"
 )
 generate_evaluations = importlib.util.module_from_spec(spec)
 sys.modules["generate_evaluations"] = generate_evaluations
@@ -61,49 +60,51 @@ if "show_results" not in st.session_state:
     st.session_state.show_results = False  # Flag to expand results section
 
 
-def initialize_results_table(df: pd.DataFrame, class_name: str, class_type: str) -> pd.DataFrame:
+def initialize_results_table(
+    df: pd.DataFrame, class_name: str, class_type: str
+) -> pd.DataFrame:
     """Crée un DataFrame vide avec tous les noms d'élèves pour affichage immédiat.
-    
+
     Args:
         df: DataFrame source contenant les données des élèves
         class_name: Nom de la classe
         class_type: Type de classe ("ECG2" ou "KE4")
-        
+
     Returns:
         DataFrame avec colonnes "Élève" et "Remarque"
     """
     student_names: List[str] = []
     rows_list = list(df.iterrows())
-    
+
     for _, row in rows_list:
         student_data = extract_student_data(row, class_type)
         if student_data is not None:
             student_name = f"{student_data['prenom']} {student_data['nom']}"
             student_names.append(student_name)
-    
+
     # Créer un DataFrame avec tous les noms et des remarques vides
-    results_df = pd.DataFrame({
-        "Élève": student_names,
-        "Remarque": [""] * len(student_names)
-    })
+    results_df = pd.DataFrame(
+        {"Élève": student_names, "Remarque": [""] * len(student_names)}
+    )
     results_df.index = range(1, len(results_df) + 1)
-    
+
     return results_df
 
 
 @st.cache_data(ttl=3600)
 def get_student_count(df: pd.DataFrame, class_type: str) -> Dict[str, int]:
     """Cache student count calculation.
-    
+
     Args:
         df: DataFrame contenant les données des élèves
         class_type: Type de classe ("ECG2" ou "KE4")
-        
+
     Returns:
         Dictionnaire avec total et nombre d'élèves valides
     """
     valid_count = sum(
-        1 for _, row in df.iterrows()
+        1
+        for _, row in df.iterrows()
         if extract_student_data(row, class_type) is not None
     )
     return {"total": len(df), "valid": valid_count}
@@ -123,13 +124,13 @@ def process_one_student(
     rows_list = list(df.iterrows())
     total_students = len(rows_list)
     evaluations = st.session_state.evaluations.get(class_name, [])
-    
+
     if max_students and len(evaluations) >= max_students:
         return None, current_idx, True
-    
+
     if current_idx >= total_students:
         return None, current_idx, True
-    
+
     _, row = rows_list[current_idx]
     student_data = extract_student_data(row, class_type)
 
@@ -138,10 +139,10 @@ def process_one_student(
 
     student_name = f"{student_data['prenom']} {student_data['nom']}"
     evaluation = generate_evaluation(client, student_data, model, temperature)
-    
+
     evaluations.append((student_name, evaluation))
     st.session_state.evaluations[class_name] = evaluations
-    
+
     # Update the results dataframe immediately for each student
     if class_name in st.session_state.results_dataframes:
         # Avoid unnecessary .copy() - directly update
@@ -150,9 +151,11 @@ def process_one_student(
         mask = results_df["Élève"] == student_name
         if mask.any():
             results_df.loc[mask, "Remarque"] = evaluation
-    
-    is_complete = (current_idx + 1 >= total_students) or (max_students and len(evaluations) >= max_students)
-    
+
+    is_complete = (current_idx + 1 >= total_students) or (
+        max_students and len(evaluations) >= max_students
+    )
+
     return (student_name, evaluation), current_idx + 1, is_complete
 
 
@@ -162,9 +165,10 @@ def main() -> None:
     st.markdown(
         "Téléchargez votre fichier Excel avec les notes des élèves pour générer des remarques individualisées."
     )
-    
+
     # Add custom CSS for better styling
-    st.markdown("""
+    st.markdown(
+        """
     <style>
         .stProgress > div > div > div > div {
             background-color: #00cc88;
@@ -184,8 +188,10 @@ def main() -> None:
             color: #0c5460;
         }
     </style>
-    """, unsafe_allow_html=True)
-    
+    """,
+        unsafe_allow_html=True,
+    )
+
     # FIRST: Display any ongoing generation progress at the top
     if any(st.session_state.generating.values()):
         for class_name in st.session_state.generating:
@@ -196,7 +202,7 @@ def main() -> None:
                     df = gen_state.get("df")
                     max_students = gen_state.get("max_students")
                     total = len(df) if df is not None else 0
-                    
+
                     # Determine what to show based on limit
                     if max_students:
                         display_total = min(max_students, total)
@@ -204,11 +210,13 @@ def main() -> None:
                     else:
                         display_total = total
                         limit_text = ""
-                    
-                    st.warning(f"⏳ **Génération en cours pour {class_name}**: {len(current_evaluations)}/{display_total} élèves{limit_text}")
+
+                    st.warning(
+                        f"⏳ **Génération en cours pour {class_name}**: {len(current_evaluations)}/{display_total} élèves{limit_text}"
+                    )
                     if display_total > 0:
                         st.progress(len(current_evaluations) / display_total)
-                    
+
                     # Show ALL evaluations generated so far
                     if current_evaluations:
                         st.subheader("📝 Évaluations générées:")
@@ -216,10 +224,13 @@ def main() -> None:
                             st.markdown(f"**{i}. {name}**")
                             st.info(eval_text)
                         st.divider()
-    
+
     # THEN: Check if we need to continue generation (process one student at a time)
     for class_name, gen_state in list(st.session_state.generation_state.items()):
-        if st.session_state.generating.get(class_name, False) and st.session_state.client:
+        if (
+            st.session_state.generating.get(class_name, False)
+            and st.session_state.client
+        ):
             # Process one student
             try:
                 df = gen_state["df"]
@@ -228,7 +239,7 @@ def main() -> None:
                 temperature = gen_state["temperature"]
                 max_students = gen_state.get("max_students")
                 current_idx = gen_state.get("current_idx", 0)
-                
+
                 result, new_idx, is_complete = process_one_student(
                     st.session_state.client,
                     df,
@@ -239,28 +250,36 @@ def main() -> None:
                     current_idx,
                     max_students,
                 )
-                
+
                 if is_complete:
                     st.session_state.generating[class_name] = False
                     if class_name in st.session_state.generation_state:
                         del st.session_state.generation_state[class_name]
                     # Mark that we should expand results
                     st.session_state.show_results = True
-                    
+
                     # Show completion message with clear indication if limited
-                    num_generated = len(st.session_state.evaluations.get(class_name, []))
+                    num_generated = len(
+                        st.session_state.evaluations.get(class_name, [])
+                    )
                     if max_students:
-                        st.success(f"✅ Génération terminée pour {class_name}! {num_generated} évaluation(s) créée(s) (limité à {max_students} sur {len(df)} élèves).")
+                        st.success(
+                            f"✅ Génération terminée pour {class_name}! {num_generated} évaluation(s) créée(s) (limité à {max_students} sur {len(df)} élèves)."
+                        )
                     else:
-                        st.success(f"✅ Génération terminée pour {class_name}! {num_generated} évaluation(s) créée(s).")
-                    
+                        st.success(
+                            f"✅ Génération terminée pour {class_name}! {num_generated} évaluation(s) créée(s)."
+                        )
+
                     # Final rerun to show completion
                     st.rerun()
                 else:
-                    st.session_state.generation_state[class_name]["current_idx"] = new_idx
+                    st.session_state.generation_state[class_name][
+                        "current_idx"
+                    ] = new_idx
                     # Rerun to process next student
                     st.rerun()
-                    
+
             except Exception as e:
                 st.error(f"❌ Erreur lors de la génération pour {class_name}: {e}")
                 st.session_state.generating[class_name] = False
@@ -275,7 +294,7 @@ def main() -> None:
 
         # API Key - get from secrets or environment, don't display in UI
         api_key: Optional[str] = None
-        
+
         # Try Streamlit secrets first
         try:
             if "OPENAI_API_KEY" in st.secrets:
@@ -283,7 +302,7 @@ def main() -> None:
                 st.success("✅ Clé API chargée depuis les secrets")
         except Exception:
             pass
-        
+
         # Fall back to environment variable
         if not api_key:
             api_key = os.getenv("OPENAI_API_KEY", "")
@@ -291,7 +310,9 @@ def main() -> None:
                 st.success("✅ Clé API chargée depuis l'environnement")
             else:
                 st.error("❌ Clé API non trouvée")
-                st.info("💡 Configurez votre clé API OpenAI via:\n- Streamlit secrets (`.streamlit/secrets.toml`)\n- Variable d'environnement `OPENAI_API_KEY`")
+                st.info(
+                    "💡 Configurez votre clé API OpenAI via:\n- Streamlit secrets (`.streamlit/secrets.toml`)\n- Variable d'environnement `OPENAI_API_KEY`"
+                )
 
         if api_key:
             try:
@@ -332,7 +353,7 @@ def main() -> None:
             help="Cochez pour traiter seulement un nombre limité d'élèves",
             key="enable_max_students",
         )
-        
+
         if enable_limit:
             max_students = st.number_input(
                 "Nombre d'élèves à traiter",
@@ -346,12 +367,13 @@ def main() -> None:
         else:
             max_students = None
             st.caption("Tous les élèves seront traités")
-        
+
         st.divider()
-        
+
         # Help section
         with st.expander("ℹ️ Aide - Comment utiliser cette application"):
-            st.markdown("""
+            st.markdown(
+                """
             ### 📋 Étapes d'utilisation
             
             1. **📤 Upload** : Téléchargez votre fichier Excel contenant les notes des élèves
@@ -373,7 +395,8 @@ def main() -> None:
             - Utilisez "Nombre max d'élèves" pour tester avec quelques élèves avant de traiter toute la classe
             - Les évaluations sont générées une par une, vous pouvez suivre la progression dans l'onglet Résultats
             - Les résultats sont sauvegardés dans la session, vous pouvez naviguer entre les onglets sans perdre les données
-            """)
+            """
+            )
 
     # Main content area - Using expandable sections instead of tabs
     # Show status if generation is active
@@ -385,7 +408,7 @@ def main() -> None:
             df_gen = gen_state.get("df")
             max_students_limit = gen_state.get("max_students")
             total = len(df_gen) if df_gen is not None else 0
-            
+
             # Determine display based on limit
             if max_students_limit:
                 display_total = min(max_students_limit, total)
@@ -393,13 +416,18 @@ def main() -> None:
             else:
                 display_total = total
                 limit_info = ""
-            
-            st.info(f"🔄 **Génération en cours pour {gen_class}**: {len(current_eval)}/{display_total} élèves traités{limit_info} - Les résultats apparaissent dans la section '📝 Résultats' ci-dessous")
+
+            st.info(
+                f"🔄 **Génération en cours pour {gen_class}**: {len(current_eval)}/{display_total} élèves traités{limit_info} - Les résultats apparaissent dans la section '📝 Résultats' ci-dessous"
+            )
             if display_total > 0:
                 st.progress(len(current_eval) / display_total)
-    
+
     # Section 1: Upload
-    with st.expander("📤 **1. Upload - Télécharger le fichier Excel**", expanded=not bool(st.session_state.excel_data)):
+    with st.expander(
+        "📤 **1. Upload - Télécharger le fichier Excel**",
+        expanded=not bool(st.session_state.excel_data),
+    ):
         st.header("Téléchargement du fichier Excel")
         uploaded_file = st.file_uploader(
             "Choisissez un fichier Excel",
@@ -419,17 +447,21 @@ def main() -> None:
                 for sheet_name in ["ECG2", "KE4"]:
                     if sheet_name in xl.sheet_names:
                         df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
-                        
+
                         # Validate Excel structure
                         is_valid, error_msg = validate_excel_structure(df, sheet_name)
                         if not is_valid:
-                            st.error(f"❌ Erreur de validation pour {sheet_name}: {error_msg}")
+                            st.error(
+                                f"❌ Erreur de validation pour {sheet_name}: {error_msg}"
+                            )
                             continue
-                        
+
                         st.session_state.excel_data[sheet_name] = df
                         st.session_state.evaluations[sheet_name] = []
                         # Initialize results table with all student names immediately
-                        results_df = initialize_results_table(df, sheet_name, sheet_name)
+                        results_df = initialize_results_table(
+                            df, sheet_name, sheet_name
+                        )
                         st.session_state.results_dataframes[sheet_name] = results_df
 
                 if "ECG2" not in xl.sheet_names and "KE4" not in xl.sheet_names:
@@ -438,15 +470,23 @@ def main() -> None:
                     )
                 else:
                     st.session_state.current_step = "data"
-                    st.success("✅ Fichier chargé! Ouvrez la section '📊 Données' ci-dessous pour continuer.")
+                    st.success(
+                        "✅ Fichier chargé! Ouvrez la section '📊 Données' ci-dessous pour continuer."
+                    )
 
             except Exception as e:
                 st.error(f"Erreur lors de la lecture du fichier: {e}")
 
     # Section 2: Data visualization and generation
-    with st.expander("📊 **2. Données - Visualiser et générer les évaluations**", expanded=bool(st.session_state.excel_data) and not any(st.session_state.generating.values())):
+    with st.expander(
+        "📊 **2. Données - Visualiser et générer les évaluations**",
+        expanded=bool(st.session_state.excel_data)
+        and not any(st.session_state.generating.values()),
+    ):
         if not st.session_state.excel_data:
-            st.info("📤 Veuillez d'abord télécharger un fichier Excel dans la section '📤 Upload' ci-dessus.")
+            st.info(
+                "📤 Veuillez d'abord télécharger un fichier Excel dans la section '📤 Upload' ci-dessus."
+            )
         else:
             class_selection = st.selectbox(
                 "Sélectionner la classe",
@@ -474,8 +514,8 @@ def main() -> None:
                         )
 
                 # Display dataframe - optimize conversion to string
-                df_display = df.astype(str).replace('nan', '', regex=False)
-                st.dataframe(df_display, width='stretch', height=400)
+                df_display = df.astype(str).replace("nan", "", regex=False)
+                st.dataframe(df_display, width="stretch", height=400)
 
                 # Show existing evaluations if any
                 if st.session_state.evaluations.get(class_selection):
@@ -488,7 +528,7 @@ def main() -> None:
                     existing_df.index = range(1, len(existing_df) + 1)
                     st.dataframe(
                         existing_df,
-                        width='stretch',
+                        width="stretch",
                         height=300,
                         column_config={
                             "Élève": st.column_config.TextColumn(
@@ -501,46 +541,66 @@ def main() -> None:
                             ),
                         },
                     )
-                    st.info(f"✅ {len(existing_evaluations)} évaluations disponibles. Consultez la section '📝 Résultats' ci-dessous pour télécharger.")
+                    st.info(
+                        f"✅ {len(existing_evaluations)} évaluations disponibles. Consultez la section '📝 Résultats' ci-dessous pour télécharger."
+                    )
 
                 # Generate evaluations button
                 if st.session_state.client:
                     st.divider()
-                    
+
                     # Check if generation is in progress
-                    is_generating = st.session_state.generating.get(class_selection, False)
-                    
+                    is_generating = st.session_state.generating.get(
+                        class_selection, False
+                    )
+
                     if is_generating:
-                        current_evaluations = st.session_state.evaluations.get(class_selection, [])
-                        gen_state = st.session_state.generation_state.get(class_selection, {})
+                        current_evaluations = st.session_state.evaluations.get(
+                            class_selection, []
+                        )
+                        gen_state = st.session_state.generation_state.get(
+                            class_selection, {}
+                        )
                         current_idx = gen_state.get("current_idx", 0)
                         max_students_gen = gen_state.get("max_students")
                         total = len(df)
-                        
+
                         # Display based on limit
                         if max_students_gen:
                             display_total = min(max_students_gen, total)
-                            st.warning(f"⏳ Génération en cours... ({len(current_evaluations)}/{display_total} élèves traités - limité à {max_students_gen})")
+                            st.warning(
+                                f"⏳ Génération en cours... ({len(current_evaluations)}/{display_total} élèves traités - limité à {max_students_gen})"
+                            )
                         else:
                             display_total = total
-                            st.warning(f"⏳ Génération en cours... ({len(current_evaluations)}/{display_total} élèves traités)")
-                        
-                        st.progress(len(current_evaluations) / display_total if display_total > 0 else 0)
-                        
+                            st.warning(
+                                f"⏳ Génération en cours... ({len(current_evaluations)}/{display_total} élèves traités)"
+                            )
+
+                        st.progress(
+                            len(current_evaluations) / display_total
+                            if display_total > 0
+                            else 0
+                        )
+
                         # Show ALL evaluations generated so far in a scrollable text area
                         if current_evaluations:
                             st.subheader("📝 Évaluations générées jusqu'à présent:")
                             results_text = ""
-                            for i, (name, eval_text) in enumerate(current_evaluations, 1):
+                            for i, (name, eval_text) in enumerate(
+                                current_evaluations, 1
+                            ):
                                 results_text += f"{i}. **{name}**\n{eval_text}\n\n"
-                            
+
                             st.markdown(results_text)
                             st.divider()
                     else:
                         # Show current settings before generation
                         with st.container():
-                            st.caption(f"Configuration: Modèle={model}, Température={temperature}, Limite élèves={max_students if max_students else 'Aucune'}")
-                        
+                            st.caption(
+                                f"Configuration: Modèle={model}, Température={temperature}, Limite élèves={max_students if max_students else 'Aucune'}"
+                            )
+
                         if st.button(
                             f"🚀 Générer les évaluations pour {class_selection}",
                             type="primary",
@@ -558,36 +618,48 @@ def main() -> None:
                                 "current_idx": 0,
                             }
                             st.session_state.current_step = "results"
-                            
+
                             # Show message and rerun to start generation
                             num_to_process = max_students if max_students else len(df)
-                            st.success(f"🚀 Génération démarrée pour {num_to_process} élève(s)! Les résultats apparaîtront en temps réel dans la section '📝 Résultats' ci-dessous.")
-                            
+                            st.success(
+                                f"🚀 Génération démarrée pour {num_to_process} élève(s)! Les résultats apparaîtront en temps réel dans la section '📝 Résultats' ci-dessous."
+                            )
+
                             # Rerun to start processing
                             st.rerun()
                 else:
-                    st.warning("⚠️ Veuillez configurer votre clé API dans la barre latérale")
+                    st.warning(
+                        "⚠️ Veuillez configurer votre clé API dans la barre latérale"
+                    )
 
     # Section 3: Results - Expand automatically when show_results is True
-    should_expand = st.session_state.show_results or (bool(st.session_state.evaluations) and not any(st.session_state.generating.values()))
-    with st.expander("📝 **3. Résultats - Voir et télécharger les évaluations**", expanded=should_expand):
+    should_expand = st.session_state.show_results or (
+        bool(st.session_state.evaluations)
+        and not any(st.session_state.generating.values())
+    )
+    with st.expander(
+        "📝 **3. Résultats - Voir et télécharger les évaluations**",
+        expanded=should_expand,
+    ):
         # Check if generation is in progress
         generating_classes = [k for k, v in st.session_state.generating.items() if v]
-        
+
         # Check if there are any evaluations
         has_evaluations = bool(st.session_state.evaluations) and any(
             st.session_state.evaluations.values()
         )
-        
+
         # Check if there are classes with data
         has_data = bool(st.session_state.excel_data)
 
         if not has_data:
-            st.info("📝 Aucune évaluation générée. Commencez par télécharger un fichier dans la section '📤 Upload'.")
+            st.info(
+                "📝 Aucune évaluation générée. Commencez par télécharger un fichier dans la section '📤 Upload'."
+            )
         else:
             # Select class to display
             all_classes = list(st.session_state.excel_data.keys())
-            
+
             if all_classes:
                 selected_class = st.selectbox(
                     "Sélectionner la classe",
@@ -602,39 +674,49 @@ def main() -> None:
                 else:
                     # Create empty results table if it doesn't exist
                     df = st.session_state.excel_data[selected_class]
-                    results_df = initialize_results_table(df, selected_class, selected_class)
+                    results_df = initialize_results_table(
+                        df, selected_class, selected_class
+                    )
                     st.session_state.results_dataframes[selected_class] = results_df
 
                 # Show progress if generating
                 if selected_class in generating_classes:
                     current_eval = st.session_state.evaluations.get(selected_class, [])
-                    gen_state = st.session_state.generation_state.get(selected_class, {})
+                    gen_state = st.session_state.generation_state.get(
+                        selected_class, {}
+                    )
                     df_gen = gen_state.get("df")
                     total = len(df_gen) if df_gen is not None else 0
-                    
-                    st.info(f"⏳ Génération en cours pour {selected_class}: {len(current_eval)}/{total} élèves traités")
+
+                    st.info(
+                        f"⏳ Génération en cours pour {selected_class}: {len(current_eval)}/{total} élèves traités"
+                    )
                     if total > 0:
                         st.progress(len(current_eval) / total)
 
                 # Display results table - re-read from session state on every render
                 st.subheader(f"Évaluations pour {selected_class}")
-                
+
                 # Count completed evaluations and show info about subset if applicable
                 completed = len([r for r in results_df["Remarque"] if r != ""])
                 total_students = len(results_df)
                 evaluations = st.session_state.evaluations.get(selected_class, [])
-                
+
                 # Check if this was a limited generation
                 if evaluations and len(evaluations) < total_students:
-                    st.info(f"ℹ️ **Génération partielle**: {completed} évaluation(s) générée(s) sur {total_students} élèves au total")
+                    st.info(
+                        f"ℹ️ **Génération partielle**: {completed} évaluation(s) générée(s) sur {total_students} élèves au total"
+                    )
                     st.caption(f"✅ {completed} évaluations complétées (sous-ensemble)")
                 else:
-                    st.caption(f"✅ {completed}/{total_students} évaluations complétées")
+                    st.caption(
+                        f"✅ {completed}/{total_students} évaluations complétées"
+                    )
 
                 # Display the table - no real-time updates, just show final state
                 st.dataframe(
                     results_df,
-                    width='stretch',
+                    width="stretch",
                     height=600,
                     column_config={
                         "Élève": st.column_config.TextColumn(
@@ -647,7 +729,7 @@ def main() -> None:
                         ),
                     },
                 )
-                
+
                 # No auto-refresh - wait for completion
 
                 # Download buttons (only show if there are completed evaluations)
@@ -660,7 +742,10 @@ def main() -> None:
                     with col1:
                         # Create text file content
                         text_content = "\n".join(
-                            [f"{name}: {eval_text}\n" for name, eval_text in evaluations]
+                            [
+                                f"{name}: {eval_text}\n"
+                                for name, eval_text in evaluations
+                            ]
                         )
 
                         st.download_button(
@@ -668,7 +753,7 @@ def main() -> None:
                             data=text_content,
                             file_name=f"remarques_{selected_class}.txt",
                             mime="text/plain",
-                            width='stretch',
+                            width="stretch",
                         )
 
                     with col2:
@@ -680,7 +765,7 @@ def main() -> None:
                             data=csv_content,
                             file_name=f"remarques_{selected_class}.csv",
                             mime="text/csv",
-                            width='stretch',
+                            width="stretch",
                         )
 
                     # Show preview of text file
@@ -697,4 +782,3 @@ if __name__ == "__main__":
     # Setup logging (suppress verbose logs in Streamlit)
     logging.basicConfig(level=logging.WARNING)
     main()
-

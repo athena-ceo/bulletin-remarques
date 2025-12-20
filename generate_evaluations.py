@@ -12,7 +12,12 @@ import os
 import logging
 import argparse
 from typing import Dict, List, Optional, Tuple
-from openai import OpenAI, APIError as OpenAIAPIError, RateLimitError, APIConnectionError
+from openai import (
+    OpenAI,
+    APIError as OpenAIAPIError,
+    RateLimitError,
+    APIConnectionError,
+)
 from pydantic import BaseModel, Field
 
 from config import APP_CONFIG
@@ -29,10 +34,10 @@ class StudentEvaluation(BaseModel):
 
 def setup_logging(log_level: str) -> None:
     """Configure le système de logging.
-    
+
     Args:
         log_level: Niveau de log (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        
+
     Raises:
         ValueError: Si le niveau de log est invalide
     """
@@ -49,10 +54,10 @@ def setup_logging(log_level: str) -> None:
 
 def get_openai_client() -> OpenAI:
     """Initialise le client OpenAI.
-    
+
     Returns:
         OpenAI: Client OpenAI initialisé
-        
+
     Raises:
         ValueError: Si la clé API n'est pas définie
     """
@@ -67,12 +72,12 @@ def calculate_general_average(
     cb1: Optional[float], cb2: Optional[float], cb3: Optional[float]
 ) -> Optional[float]:
     """Calcule la moyenne générale à partir des trois concours blancs.
-    
+
     Args:
         cb1: Moyenne du concours blanc 1
         cb2: Moyenne du concours blanc 2
         cb3: Moyenne du concours blanc 3
-        
+
     Returns:
         La moyenne générale ou None si aucune note valide
     """
@@ -84,11 +89,11 @@ def calculate_general_average(
 
 def extract_student_data(row: pd.Series, class_type: str) -> Optional[Dict]:
     """Extrait les données d'un élève depuis une ligne du DataFrame.
-    
+
     Args:
         row: Ligne du DataFrame pandas contenant les données de l'élève
         class_type: Type de classe ("ECG2" ou "KE4")
-        
+
     Returns:
         Dictionnaire contenant les données de l'élève, ou None si invalide
     """
@@ -186,10 +191,10 @@ def extract_student_data(row: pd.Series, class_type: str) -> Optional[Dict]:
 
 def format_student_data_for_prompt(student_data: Dict) -> str:
     """Formate les données de l'élève pour le prompt OpenAI.
-    
+
     Args:
         student_data: Dictionnaire contenant les données de l'élève
-        
+
     Returns:
         Chaîne de caractères formatée pour le prompt
     """
@@ -258,19 +263,19 @@ def format_student_data_for_prompt(student_data: Dict) -> str:
 
 
 def generate_evaluation(
-    client: OpenAI, 
-    student_data: Dict, 
-    model: str = APP_CONFIG.DEFAULT_MODEL, 
-    temperature: float = APP_CONFIG.DEFAULT_TEMPERATURE
+    client: OpenAI,
+    student_data: Dict,
+    model: str = APP_CONFIG.DEFAULT_MODEL,
+    temperature: float = APP_CONFIG.DEFAULT_TEMPERATURE,
 ) -> str:
     """Génère une évaluation pour un élève en utilisant l'API OpenAI.
-    
+
     Args:
         client: Client OpenAI initialisé
         student_data: Dictionnaire contenant les données de l'élève
         model: Modèle OpenAI à utiliser
         temperature: Température pour la génération (0.0-1.0)
-        
+
     Returns:
         Remarque de bulletin générée par l'IA
     """
@@ -368,17 +373,17 @@ Génère une remarque de bulletin individualisée en français, dans un style na
         error_msg = f"Limite de taux API atteinte pour {student_data['prenom']} {student_data['nom']}"
         logging.error(error_msg, exc_info=True)
         return "[Erreur: Limite de taux API atteinte. Veuillez réessayer plus tard.]"
-    
+
     except APIConnectionError as e:
         error_msg = f"Erreur de connexion API pour {student_data['prenom']} {student_data['nom']}"
         logging.error(error_msg, exc_info=True)
         return "[Erreur: Impossible de se connecter à l'API OpenAI.]"
-    
+
     except OpenAIAPIError as e:
         error_msg = f"Erreur API OpenAI pour {student_data['prenom']} {student_data['nom']}: {e}"
         logging.error(error_msg, exc_info=True)
         return f"[Erreur API: {str(e)[:100]}]"
-    
+
     except Exception as e:
         logging.error(
             f"Erreur inattendue lors de la génération pour {student_data['prenom']} {student_data['nom']}: {e}",
@@ -397,7 +402,7 @@ def process_class(
     max_students: Optional[int] = None,
 ) -> List[Tuple[str, str]]:
     """Traite tous les élèves d'une classe et retourne les évaluations avec les noms.
-    
+
     Args:
         client: Client OpenAI initialisé
         df: DataFrame pandas contenant les données de la classe
@@ -406,7 +411,7 @@ def process_class(
         model: Modèle OpenAI à utiliser
         temperature: Température pour la génération
         max_students: Nombre maximum d'élèves à traiter (pour tests)
-        
+
     Returns:
         Liste de tuples (nom_élève, évaluation)
     """
@@ -501,7 +506,7 @@ def main() -> None:
     if not is_valid:
         logging.error(f"Validation échouée: {error_msg}")
         sys.exit(1)
-    
+
     logging.info(f"Validation réussie. Onglets valides: {', '.join(valid_sheets)}")
 
     # Initialiser le client OpenAI
