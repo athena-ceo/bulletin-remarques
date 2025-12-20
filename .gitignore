@@ -140,9 +140,14 @@ celerybeat.pid
 .venv
 env/
 venv/
+brvenv/
 ENV/
 env.bak/
 venv.bak/
+
+# Streamlit secrets (contains API keys)
+.streamlit/secrets.toml
+.streamlit/
 
 # Spyder project settings
 .spyderproject

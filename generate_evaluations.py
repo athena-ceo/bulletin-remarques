@@ -238,21 +238,27 @@ def generate_evaluation(
 
 Contraintes impératives:
 * Longueur maximale : 200 caractères espaces compris
-* Style : professionnel, bienveillant mais exigeant. Pas de formules vagues ou génériques. La remarque doit s'appuyer sur les notes
+* Style : naturel, fluide et professionnel. Éviter le style télégraphique. Rédiger des phrases complètes et bien construites.
+* Ne JAMAIS mentionner de notes chiffrées dans la remarque (pas de "/20", pas de moyennes, pas de chiffres)
+* La remarque doit être bienveillante mais exigeante, et s'appuyer sur l'analyse des résultats sans les citer
 
 Règles pédagogiques d'interprétation:
-* Si Moyenne < 9/20 :
-  - Mentionner la nécessité d'acquérir des automatismes fiables. Insister sur la consolidation des fautes de première gravité et le travail régulier de la grammaire vue en cours.
-  - Si traduction faible, alors signaler un manque de maîtrise grammaticale et lexicale.
-  - Si essai faible ou moyen, alors souligner l'insuffisance de l'argumentation, du raisonnement et/ou de la structuration des idées.
-  - Si synthèse faible (KE4), alors mentionner des difficultés de méthode, de hiérarchisation des idées ou de restitution fidèle des documents.
-* Si les résultats sont en progression, alors valoriser explicitement les progrès.
-* Si les résultats sont solides (>= 12), alors souligner la régularité, la maîtrise des attendus et le sérieux du travail.
+* Si les résultats sont faibles (moyenne < 9/20):
+  - Mentionner la nécessité d'acquérir des automatismes fiables et de consolider les bases grammaticales par un travail régulier
+  - Si la traduction est faible: signaler les difficultés de maîtrise grammaticale et lexicale
+  - Si l'essai est faible ou moyen: souligner les faiblesses dans l'argumentation, le raisonnement ou la structuration des idées
+  - Si la synthèse est faible (KE4): mentionner des difficultés méthodologiques, de hiérarchisation ou de restitution fidèle
+
+* Si les résultats sont en progression:
+  - Valoriser explicitement les progrès observés et encourager la poursuite des efforts
+
+* Si les résultats sont solides (>= 12/20):
+  - Souligner la régularité, la maîtrise des attendus et le sérieux du travail fourni
 
 Données de l'élève:
 {student_info}
 
-Génère une remarque de bulletin individualisée en français, maximum 200 caractères."""
+Génère une remarque de bulletin individualisée en français, dans un style naturel avec des phrases complètes, sans mentionner de notes chiffrées, maximum 200 caractères."""
 
     try:
         # Utiliser la nouvelle API Responses avec structured outputs

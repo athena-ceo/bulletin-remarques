@@ -15,11 +15,40 @@ pip install -r requirements.txt
 ```
 
 3. Configurer la clé API OpenAI :
+
+**Option 1 : Variable d'environnement (recommandé pour développement local)**
 ```bash
 export OPENAI_API_KEY="votre-clé-api"
 ```
 
+**Option 2 : Secrets Streamlit (recommandé pour production)**
+
+Créez un fichier `.streamlit/secrets.toml` :
+```toml
+OPENAI_API_KEY = "votre-clé-api"
+```
+
+Note: Le fichier `secrets.toml` ne doit jamais être commis dans git. Ajoutez `.streamlit/` à votre `.gitignore`.
+
 ## Utilisation
+
+### Interface Web (Streamlit) - Recommandé
+
+Lancez l'interface web Streamlit :
+
+```bash
+streamlit run streamlit_app.py
+```
+
+L'interface s'ouvrira dans votre navigateur. Vous pourrez :
+- Télécharger votre fichier Excel
+- Visualiser les données
+- Configurer les paramètres (modèle, température)
+- Générer les évaluations avec une barre de progression
+- Visualiser les résultats dans un tableau
+- Télécharger les fichiers de résultats (texte ou CSV)
+
+### Ligne de commande
 
 ```bash
 python generate_evaluations.py <fichier_excel>
