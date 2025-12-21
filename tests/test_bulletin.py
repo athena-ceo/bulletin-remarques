@@ -118,6 +118,59 @@ class TestExtractStudentData:
         assert result["type"] == "KE4"
         assert result["cb1"]["synthese"] == 12.5
 
+    def test_moyennes_row_filtered(self):
+        """Test that 'Moyennes' row is filtered out."""
+        row = pd.Series(
+            {
+                0: pd.NA,
+                1: "Moyennes",
+                2: pd.NA,
+                "CB1 Compréhension": 12.5,
+                "Essai": 14.0,
+                "Traduction": 11.0,
+                "Moyenne CB1": 12.5,
+                "CB2 Compréhension": 13.0,
+                "Essai.1": 15.0,
+                "Traduction.1": 12.0,
+                "Moyenne CB2": 13.3,
+                "CB3 Compréhension": 14.0,
+                "Essai.2": 16.0,
+                "Traduction.2": 13.0,
+                "Moyenne CB3": 14.3,
+            }
+        )
+
+        result = extract_student_data(row, "ECG2")
+        assert result is None
+
+    def test_moyenne_row_lowercase_filtered(self):
+        """Test that 'moyenne' (lowercase) row is filtered out."""
+        row = pd.Series(
+            {
+                0: pd.NA,
+                1: "moyenne",
+                2: pd.NA,
+                "CB1 Compréhension": 12.5,
+            }
+        )
+
+        result = extract_student_data(row, "ECG2")
+        assert result is None
+
+    def test_total_row_filtered(self):
+        """Test that 'Total' row is filtered out."""
+        row = pd.Series(
+            {
+                0: pd.NA,
+                1: "Total",
+                2: pd.NA,
+                "CB1 Compréhension": 12.5,
+            }
+        )
+
+        result = extract_student_data(row, "ECG2")
+        assert result is None
+
 
 class TestFormatStudentDataForPrompt:
     """Tests for format_student_data_for_prompt function."""

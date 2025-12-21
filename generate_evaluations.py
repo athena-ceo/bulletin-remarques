@@ -11,6 +11,7 @@ import sys
 import os
 import logging
 import argparse
+import httpx
 from typing import Dict, List, Optional, Tuple
 from openai import (
     OpenAI,
@@ -52,8 +53,11 @@ def setup_logging(log_level: str) -> None:
     )
 
 
-def get_openai_client() -> OpenAI:
+def get_openai_client(api_key: Optional[str] = None) -> OpenAI:
     """Initialise le client OpenAI.
+
+    Args:
+        api_key: Clé API OpenAI (optionnel, utilise OPENAI_API_KEY si non fourni)
 
     Returns:
         OpenAI: Client OpenAI initialisé
@@ -61,9 +65,10 @@ def get_openai_client() -> OpenAI:
     Raises:
         ValueError: Si la clé API n'est pas définie
     """
-    api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise ValueError("La variable d'environnement OPENAI_API_KEY n'est pas définie")
+        api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("La clé API OpenAI n'est pas définie")
     logging.debug("Initialisation du client OpenAI")
     return OpenAI(api_key=api_key)
 
@@ -92,7 +97,7 @@ def extract_student_data(row: pd.Series, class_type: str) -> Optional[Dict]:
 
     Args:
         row: Ligne du DataFrame pandas contenant les données de l'élève
-        class_type: Type de classe ("ECG2" ou "KE4")
+        class_type: Nom de la classe (utilisé comme label, la structure est auto-détectée)
 
     Returns:
         Dictionnaire contenant les données de l'élève, ou None si invalide
@@ -101,12 +106,26 @@ def extract_student_data(row: pd.Series, class_type: str) -> Optional[Dict]:
     last_name = row.iloc[1]
     first_name = row.iloc[2]
 
-    # Vérifier si c'est une ligne valide (avec un nom)
+    # Skip rows that are summary rows (averages, etc.) - check this FIRST
+    # before checking for missing names
+    if not pd.isna(last_name):
+        last_name_str = str(last_name).strip().lower()
+        if any(
+            keyword in last_name_str
+            for keyword in ["moyenne", "moyennes", "total", "somme"]
+        ):
+            return None
+
+    # Vérifier si c'est une ligne valide (avec un nom et prénom)
     if pd.isna(last_name) or pd.isna(first_name):
         return None
 
-    if class_type == "ECG2":
-        # Première année: Compréhension, Essai, Traduction
+    # Auto-detect structure: check for "Compréhension" vs "Synthèse"
+    has_comprehension = "CB1 Compréhension" in row.index
+    has_synthese = "CB1 Synthèse" in row.index
+
+    if has_comprehension:
+        # First year structure: Compréhension, Essai, Traduction
         cb1_comp = row.get("CB1 Compréhension")
         cb1_essai = row.get("Essai")
         cb1_trad = row.get("Traduction")
@@ -144,10 +163,11 @@ def extract_student_data(row: pd.Series, class_type: str) -> Optional[Dict]:
                 "traduction": cb3_trad,
                 "moyenne": cb3_moy,
             },
-            "type": "ECG2",
+            "type": class_type,
+            "structure": "comprehension",
         }
-    else:  # KE4
-        # Deuxième année: Synthèse, Essai, Traduction
+    elif has_synthese:
+        # Second year structure: Synthèse, Essai, Traduction
         cb1_synth = row.get("CB1 Synthèse")
         cb1_essai = row.get("Essai")
         cb1_trad = row.get("Traduction")
@@ -185,8 +205,13 @@ def extract_student_data(row: pd.Series, class_type: str) -> Optional[Dict]:
                 "traduction": cb3_trad,
                 "moyenne": cb3_moy,
             },
-            "type": "KE4",
+            "type": class_type,
+            "structure": "synthese",
         }
+    else:
+        # Unknown structure - return None
+        logging.warning(f"Unknown structure for class {class_type}, row {student_num}")
+        return None
 
 
 def format_student_data_for_prompt(student_data: Dict) -> str:
@@ -267,6 +292,7 @@ def generate_evaluation(
     student_data: Dict,
     model: str = APP_CONFIG.DEFAULT_MODEL,
     temperature: float = APP_CONFIG.DEFAULT_TEMPERATURE,
+    max_retries: int = 3,
 ) -> str:
     """Génère une évaluation pour un élève en utilisant l'API OpenAI.
 
@@ -275,6 +301,7 @@ def generate_evaluation(
         student_data: Dictionnaire contenant les données de l'élève
         model: Modèle OpenAI à utiliser
         temperature: Température pour la génération (0.0-1.0)
+        max_retries: Nombre maximum de tentatives si la longueur dépasse 200 caractères
 
     Returns:
         Remarque de bulletin générée par l'IA
@@ -293,11 +320,17 @@ def generate_evaluation(
                 # Ignorer les valeurs non numériques (comme "absent", "ABS", etc.)
                 pass
 
-    # Construire le prompt selon les guidelines
-    prompt = f"""Objectif: Générer une remarque de bulletin individualisée pour cet élève, en français, à partir des résultats chiffrés.
+    for attempt in range(max_retries):
+        # Construire le prompt selon les guidelines, plus strict à chaque tentative
+        strictness_note = ""
+        if attempt > 0:
+            strictness_note = f"\n\n⚠️ ATTENTION: Tentative {attempt + 1}/{max_retries}. La remarque précédente était trop longue. Vous DEVEZ respecter la limite de 200 caractères. Soyez plus concis et direct."
+
+        prompt = f"""Objectif: Générer une remarque de bulletin individualisée pour cet élève, en français, à partir des résultats chiffrés.
 
 Contraintes impératives:
-* Longueur maximale : 200 caractères espaces compris
+* Longueur maximale STRICTE : 200 caractères espaces compris (IMPÉRATIF - comptez les caractères!)
+* Utiliser "CB" au lieu de "Concours Blanc" pour économiser des caractères
 * Style : naturel, fluide et professionnel. Éviter le style télégraphique. Rédiger des phrases complètes et bien construites.
 * Ne JAMAIS mentionner de notes chiffrées dans la remarque (pas de "/20", pas de moyennes, pas de chiffres)
 * La remarque doit être bienveillante mais exigeante, et s'appuyer sur l'analyse des résultats sans les citer
@@ -317,79 +350,120 @@ Règles pédagogiques d'interprétation:
 
 Données de l'élève:
 {student_info}
+{strictness_note}
 
-Génère une remarque de bulletin individualisée en français, dans un style naturel avec des phrases complètes, sans mentionner de notes chiffrées, maximum 200 caractères."""
+Génère une remarque de bulletin individualisée en français, dans un style naturel avec des phrases complètes, sans mentionner de notes chiffrées, MAXIMUM 200 CARACTÈRES (incluant espaces et ponctuation)."""
 
-    try:
-        # Utiliser la nouvelle API Responses avec structured outputs
-        system_instruction = "Tu es un professeur d'anglais en CPGE (classe préparatoire aux grandes écoles) spécialisé dans la rédaction de remarques de bulletins claires, professionnelles et pédagogiques, 200 caractères maximum."
+        try:
+            # Utiliser la nouvelle API Responses avec structured outputs
+            system_instruction = "Tu es un professeur d'anglais en CPGE spécialisé dans la rédaction de remarques de bulletins claires, professionnelles et pédagogiques. Tu dois IMPÉRATIVEMENT respecter la limite de 200 caractères. Utilise 'CB' au lieu de 'Concours Blanc'."
 
-        full_input = f"{system_instruction}\n\n{prompt}"
+            full_input = f"{system_instruction}\n\n{prompt}"
 
-        logging.info(
-            f"Envoi de la requête à l'API pour {student_data['prenom']} {student_data['nom']} "
-            f"(modèle: {model}, température: {temperature})"
-        )
-        logging.debug(f"Prompt complet:\n{full_input}")
+            logging.info(
+                f"Envoi de la requête à l'API pour {student_data['prenom']} {student_data['nom']} "
+                f"(modèle: {model}, température: {temperature}, tentative: {attempt + 1}/{max_retries})"
+            )
+            logging.debug(f"Prompt complet:\n{full_input}")
 
-        response = client.responses.parse(
-            model=model,
-            input=full_input,
-            text_format=StudentEvaluation,
-            temperature=temperature,
-        )
+            # Add timeout to the API call (60 seconds total, 10 seconds to connect)
+            timeout = httpx.Timeout(60.0, connect=10.0)
 
-        logging.debug(
-            f"Réponse reçue de l'API pour {student_data['prenom']} {student_data['nom']}"
-        )
+            response = client.responses.parse(
+                model=model,
+                input=full_input,
+                text_format=StudentEvaluation,
+                temperature=temperature,
+                timeout=timeout,
+            )
 
-        # La méthode parse retourne un ParsedResponse
-        # La structure est: response.output[0].content[0].parsed
-        if hasattr(response, "output") and response.output:
-            if len(response.output) > 0:
-                output_message = response.output[0]
-                if hasattr(output_message, "content") and output_message.content:
-                    if len(output_message.content) > 0:
-                        output_text = output_message.content[0]
-                        if hasattr(output_text, "parsed"):
-                            parsed_eval = output_text.parsed
-                            if isinstance(parsed_eval, StudentEvaluation):
-                                logging.info(
-                                    f"Évaluation générée pour {student_data['prenom']} {student_data['nom']}: "
-                                    f"{parsed_eval.remarque[:50]}..."
-                                )
-                                return parsed_eval.remarque
+            logging.debug(
+                f"Réponse reçue de l'API pour {student_data['prenom']} {student_data['nom']}"
+            )
 
-        logging.error(
-            f"Structure de réponse inattendue pour {student_data['prenom']} {student_data['nom']}"
-        )
-        logging.debug(f"Type de la réponse: {type(response)}")
-        logging.debug(
-            f"Attributs de la réponse: {[attr for attr in dir(response) if not attr.startswith('_')]}"
-        )
-        return "[Erreur: réponse invalide - structure inattendue]"
+            # La méthode parse retourne un ParsedResponse
+            # La structure est: response.output[0].content[0].parsed
+            if hasattr(response, "output") and response.output:
+                if len(response.output) > 0:
+                    output_message = response.output[0]
+                    if hasattr(output_message, "content") and output_message.content:
+                        if len(output_message.content) > 0:
+                            output_text = output_message.content[0]
+                            if hasattr(output_text, "parsed"):
+                                parsed_eval = output_text.parsed
+                                if isinstance(parsed_eval, StudentEvaluation):
+                                    remarque = parsed_eval.remarque
+                                    remarque_length = len(remarque)
 
-    except RateLimitError as e:
-        error_msg = f"Limite de taux API atteinte pour {student_data['prenom']} {student_data['nom']}"
-        logging.error(error_msg, exc_info=True)
-        return "[Erreur: Limite de taux API atteinte. Veuillez réessayer plus tard.]"
+                                    # Vérifier la longueur
+                                    if remarque_length <= APP_CONFIG.MAX_REMARK_LENGTH:
+                                        logging.info(
+                                            f"Évaluation générée pour {student_data['prenom']} {student_data['nom']}: "
+                                            f"{remarque[:50]}... ({remarque_length} caractères)"
+                                        )
+                                        return remarque
+                                    else:
+                                        logging.warning(
+                                            f"Remarque trop longue pour {student_data['prenom']} {student_data['nom']}: "
+                                            f"{remarque_length} caractères (max: {APP_CONFIG.MAX_REMARK_LENGTH}). "
+                                            f"Tentative {attempt + 1}/{max_retries}"
+                                        )
+                                        if attempt < max_retries - 1:
+                                            continue  # Retry
+                                        else:
+                                            # Dernière tentative échouée, tronquer la remarque
+                                            logging.error(
+                                                f"Impossible de générer une remarque ≤ 200 caractères après {max_retries} tentatives. "
+                                                f"Troncature de la remarque."
+                                            )
+                                            return remarque[
+                                                : APP_CONFIG.MAX_REMARK_LENGTH
+                                            ]
 
-    except APIConnectionError as e:
-        error_msg = f"Erreur de connexion API pour {student_data['prenom']} {student_data['nom']}"
-        logging.error(error_msg, exc_info=True)
-        return "[Erreur: Impossible de se connecter à l'API OpenAI.]"
+            logging.error(
+                f"Structure de réponse inattendue pour {student_data['prenom']} {student_data['nom']}"
+            )
+            logging.debug(f"Type de la réponse: {type(response)}")
+            logging.debug(
+                f"Attributs de la réponse: {[attr for attr in dir(response) if not attr.startswith('_')]}"
+            )
+            return "[Erreur: réponse invalide - structure inattendue]"
 
-    except OpenAIAPIError as e:
-        error_msg = f"Erreur API OpenAI pour {student_data['prenom']} {student_data['nom']}: {e}"
-        logging.error(error_msg, exc_info=True)
-        return f"[Erreur API: {str(e)[:100]}]"
+        except httpx.TimeoutException as e:
+            error_msg = f"Timeout lors de la génération pour {student_data['prenom']} {student_data['nom']} (tentative {attempt + 1}/{max_retries})"
+            logging.error(error_msg, exc_info=True)
+            if attempt < max_retries - 1:
+                logging.info(f"Nouvelle tentative après timeout...")
+                continue  # Retry
+            else:
+                return "[Erreur: Timeout - L'API a mis trop de temps à répondre après plusieurs tentatives.]"
 
-    except Exception as e:
-        logging.error(
-            f"Erreur inattendue lors de la génération pour {student_data['prenom']} {student_data['nom']}: {e}",
-            exc_info=True,
-        )
-        return "[Erreur inattendue lors de la génération de l'évaluation]"
+        except RateLimitError as e:
+            error_msg = f"Limite de taux API atteinte pour {student_data['prenom']} {student_data['nom']}"
+            logging.error(error_msg, exc_info=True)
+            return (
+                "[Erreur: Limite de taux API atteinte. Veuillez réessayer plus tard.]"
+            )
+
+        except APIConnectionError as e:
+            error_msg = f"Erreur de connexion API pour {student_data['prenom']} {student_data['nom']}"
+            logging.error(error_msg, exc_info=True)
+            return "[Erreur: Impossible de se connecter à l'API OpenAI.]"
+
+        except OpenAIAPIError as e:
+            error_msg = f"Erreur API OpenAI pour {student_data['prenom']} {student_data['nom']}: {e}"
+            logging.error(error_msg, exc_info=True)
+            return f"[Erreur API: {str(e)[:100]}]"
+
+        except Exception as e:
+            logging.error(
+                f"Erreur inattendue lors de la génération pour {student_data['prenom']} {student_data['nom']}: {e}",
+                exc_info=True,
+            )
+            return "[Erreur inattendue lors de la génération de l'évaluation]"
+
+    # Si on arrive ici, toutes les tentatives ont échoué
+    return "[Erreur: impossible de générer une évaluation valide]"
 
 
 def process_class(
