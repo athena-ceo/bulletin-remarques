@@ -145,12 +145,14 @@ def process_one_student(
 
     # Update the results dataframe immediately for each student
     if class_name in st.session_state.results_dataframes:
-        # Avoid unnecessary .copy() - directly update
-        results_df = st.session_state.results_dataframes[class_name]
+        # Get a copy to ensure Streamlit detects the change
+        results_df = st.session_state.results_dataframes[class_name].copy()
         # Find the row for this student and update it
         mask = results_df["Élève"] == student_name
         if mask.any():
             results_df.loc[mask, "Remarque"] = evaluation
+        # Reassign to trigger Streamlit state change detection
+        st.session_state.results_dataframes[class_name] = results_df
 
     is_complete = (current_idx + 1 >= total_students) or (
         max_students and len(evaluations) >= max_students
