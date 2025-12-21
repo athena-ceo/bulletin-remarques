@@ -14,9 +14,12 @@ Programme Python pour générer des remarques de bulletins individualisées pour
 
 ## Installation
 
-1. Activer l'environnement virtuel :
+1. Créer et activer un environnement virtuel :
 ```bash
-source brvenv/bin/activate
+python3 -m venv venv
+source venv/bin/activate  # Sur Linux/Mac
+# ou
+venv\Scripts\activate  # Sur Windows
 ```
 
 2. Installer les dépendances :

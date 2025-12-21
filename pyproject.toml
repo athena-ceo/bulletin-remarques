@@ -11,7 +11,8 @@ addopts = "-v --tb=short"
 source = ["."]
 omit = [
     "tests/*",
-    "brvenv/*",
+    "venv/*",
+    "*venv/*",
     "*/__pycache__/*",
     "*/site-packages/*",
 ]
