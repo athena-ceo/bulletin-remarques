@@ -219,15 +219,6 @@ def main() -> None:
             key="model_selection",
         )
 
-        temperature = st.slider(
-            "Température",
-            min_value=APP_CONFIG.MIN_TEMPERATURE,
-            max_value=APP_CONFIG.MAX_TEMPERATURE,
-            value=APP_CONFIG.DEFAULT_TEMPERATURE,
-            step=APP_CONFIG.TEMPERATURE_STEP,
-            help="Contrôle la créativité (0.0 = déterministe, 1.0 = créatif)",
-        )
-
         st.divider()
 
         with st.expander("❓ Aide", expanded=False):
@@ -237,7 +228,7 @@ def main() -> None:
 
             **1. Configuration**
             - Assurez-vous que votre clé API OpenAI est configurée
-            - Choisissez le modèle et la température selon vos besoins
+            - Choisissez le modèle selon vos besoins
 
             **2. Fichier Excel**
             - Une feuille par classe (le nom de la feuille = nom de la classe)
@@ -469,12 +460,11 @@ def main() -> None:
                             )
                             with st.spinner(f"Génération pour {student_name}..."):
                                 try:
-                                    evaluation = generate_evaluation(
-                                        st.session_state.client,
-                                        student_data,
-                                        model,
-                                        temperature,
-                                    )
+                                evaluation = generate_evaluation(
+                                    st.session_state.client,
+                                    student_data,
+                                    model,
+                                )
                                 except Exception as e:
                                     logging.error(
                                         f"Error for {student_name}: {e}",

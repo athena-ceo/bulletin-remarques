@@ -219,7 +219,6 @@ def generate_evaluation(
     client: OpenAI,
     student_data: Dict,
     model: str = APP_CONFIG.DEFAULT_MODEL,
-    temperature: float = APP_CONFIG.DEFAULT_TEMPERATURE,
     max_retries: int = 3,
 ) -> str:
     """Génère une évaluation pour un élève en utilisant l'API OpenAI.
@@ -228,7 +227,6 @@ def generate_evaluation(
         client: Client OpenAI initialisé
         student_data: Dictionnaire contenant les données de l'élève
         model: Modèle OpenAI à utiliser
-        temperature: Température pour la génération (0.0-1.0)
         max_retries: Nombre maximum de tentatives si la longueur dépasse 200 caractères
 
     Returns:
@@ -288,7 +286,7 @@ Génère une remarque de bulletin individualisée en français, dans un style na
 
             logging.info(
                 f"Envoi de la requête à l'API pour {student_data['prenom']} {student_data['nom']} "
-                f"(modèle: {model}, température: {temperature}, tentative: {attempt + 1}/{max_retries})"
+                f"(modèle: {model}, tentative: {attempt + 1}/{max_retries})"
             )
             logging.debug(f"Prompt complet:\n{full_input}")
 
@@ -299,7 +297,6 @@ Génère une remarque de bulletin individualisée en français, dans un style na
                 model=model,
                 input=full_input,
                 text_format=StudentEvaluation,
-                temperature=temperature,
                 timeout=timeout,
             )
 
@@ -397,7 +394,6 @@ def process_class(
     df: pd.DataFrame,
     mapping: SheetColumnMapping,
     model: str = APP_CONFIG.DEFAULT_MODEL,
-    temperature: float = APP_CONFIG.DEFAULT_TEMPERATURE,
     max_students: Optional[int] = None,
 ) -> List[Tuple[str, str]]:
     """Traite tous les élèves d'une classe et retourne les évaluations avec les noms.
@@ -407,7 +403,6 @@ def process_class(
         df: DataFrame pandas contenant les données de la classe
         mapping: Correspondance des colonnes pour la feuille
         model: Modèle OpenAI à utiliser
-        temperature: Température pour la génération
         max_students: Nombre maximum d'élèves à traiter (pour tests)
 
     Returns:
@@ -440,7 +435,7 @@ def process_class(
         logging.info(
             f"Traitement de l'élève {student_count}: {student_name} ({class_name})"
         )
-        evaluation = generate_evaluation(client, student_data, model, temperature)
+        evaluation = generate_evaluation(client, student_data, model)
         evaluations.append((student_name, evaluation))
 
     logging.info(
@@ -476,12 +471,6 @@ def main() -> None:
         choices=APP_CONFIG.AVAILABLE_MODELS,
         help=f"Modèle OpenAI à utiliser (défaut: {APP_CONFIG.DEFAULT_MODEL})",
     )
-    parser.add_argument(
-        "--temperature",
-        type=float,
-        default=APP_CONFIG.DEFAULT_TEMPERATURE,
-        help=f"Température pour la génération (défaut: {APP_CONFIG.DEFAULT_TEMPERATURE})",
-    )
 
     args = parser.parse_args()
 
@@ -489,7 +478,7 @@ def main() -> None:
     setup_logging(args.log_level)
     logging.info("Démarrage du programme de génération d'évaluations")
     logging.info(f"Fichier Excel: {args.excel_file}")
-    logging.info(f"Modèle: {args.model}, Température: {args.temperature}")
+    logging.info(f"Modèle: {args.model}")
     if args.max_students:
         logging.info(f"Limite: {args.max_students} élèves par classe")
 
@@ -545,7 +534,6 @@ def main() -> None:
             df,
             mapping,
             args.model,
-            args.temperature,
             args.max_students,
         )
 

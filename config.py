@@ -12,10 +12,6 @@ class AppConfig:
     # OpenAI settings
     DEFAULT_MODEL: str = "gpt-5-mini"
     AVAILABLE_MODELS: List[str] = ("gpt-5-mini", "gpt-5")
-    DEFAULT_TEMPERATURE: float = 0.7
-    MIN_TEMPERATURE: float = 0.0
-    MAX_TEMPERATURE: float = 1.0
-    TEMPERATURE_STEP: float = 0.1
 
     # Evaluation constraints
     MAX_REMARK_LENGTH: int = 200
