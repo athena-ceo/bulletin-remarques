@@ -10,8 +10,8 @@ class AppConfig:
     """General application configuration."""
 
     # OpenAI settings
-    DEFAULT_MODEL: str = "gpt-5.2"
-    AVAILABLE_MODELS: List[str] = ("gpt-5.2", "gpt-4o-mini", "gpt-4o")
+    DEFAULT_MODEL: str = "gpt-5-mini"
+    AVAILABLE_MODELS: List[str] = ("gpt-5-mini", "gpt-5")
     DEFAULT_TEMPERATURE: float = 0.7
     MIN_TEMPERATURE: float = 0.0
     MAX_TEMPERATURE: float = 1.0
