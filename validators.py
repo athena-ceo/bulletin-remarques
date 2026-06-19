@@ -2,80 +2,71 @@
 
 from __future__ import annotations
 
-from typing import Tuple, Set, List
+from typing import List, Tuple
 import pandas as pd
 import logging
 
-from config import EXCEL_CONFIG
+from column_mapping import SheetColumnMapping, mapping_is_complete
 
 
-def get_required_columns(class_type: str) -> Set[str]:
-    """Get the required column names for a specific class type.
-    
-    Args:
-        class_type: Type of class ("ECG2" or "KE4")
-        
-    Returns:
-        Set of required column names
-    """
-    if class_type == "ECG2":
-        return set([
-            *EXCEL_CONFIG.ECG2_COMPREHENSION_COLS,
-            *EXCEL_CONFIG.ECG2_ESSAI_COLS,
-            *EXCEL_CONFIG.ECG2_TRADUCTION_COLS,
-            *EXCEL_CONFIG.ECG2_MOYENNE_COLS,
-        ])
-    else:  # KE4
-        return set([
-            *EXCEL_CONFIG.KE4_SYNTHESE_COLS,
-            *EXCEL_CONFIG.KE4_ESSAI_COLS,
-            *EXCEL_CONFIG.KE4_TRADUCTION_COLS,
-            *EXCEL_CONFIG.KE4_MOYENNE_COLS,
-        ])
+def validate_excel_structure(
+    df: pd.DataFrame, mapping: SheetColumnMapping
+) -> Tuple[bool, str]:
+    """Validate Excel file structure for a mapped worksheet.
 
-
-def validate_excel_structure(df: pd.DataFrame, class_type: str) -> Tuple[bool, str]:
-    """Validate Excel file structure for a specific class type.
-    
     Args:
         df: DataFrame to validate
-        class_type: Type of class ("ECG2" or "KE4")
-        
+        mapping: Column mapping for the worksheet
+
     Returns:
         Tuple of (is_valid, error_message)
     """
-    # Check if DataFrame is empty
     if len(df) == 0:
-        return False, f"Le fichier pour {class_type} est vide (aucune ligne de données)"
-    
-    # Check if DataFrame has at least 3 columns (for student info)
+        return False, f"Le fichier pour {mapping.class_name} est vide (aucune ligne de données)"
+
     if len(df.columns) < 3:
-        return False, f"Structure invalide: moins de 3 colonnes trouvées dans {class_type}"
-    
-    # Get required columns
-    required_cols = get_required_columns(class_type)
-    existing_cols = set(df.columns)
-    
-    # Check for missing columns
-    missing_cols = required_cols - existing_cols
+        return False, (
+            f"Structure invalide: moins de 3 colonnes trouvées dans {mapping.class_name}"
+        )
+
+    is_complete, completion_msg = mapping_is_complete(mapping)
+    if not is_complete:
+        return False, completion_msg
+
+    existing_cols = {str(col) for col in df.columns}
+    missing_cols = [col for col in mapping.required_columns() if col not in existing_cols]
     if missing_cols:
-        return False, f"Colonnes manquantes dans {class_type}: {', '.join(sorted(missing_cols))}"
-    
-    # Check if there's at least one valid student row
-    valid_rows = df.iloc[:, 1].notna() & df.iloc[:, 2].notna()
+        return False, (
+            f"Colonnes manquantes dans {mapping.class_name}: "
+            f"{', '.join(sorted(missing_cols))}"
+        )
+
+    valid_rows = (
+        df.iloc[:, mapping.last_name_col].notna()
+        & df.iloc[:, mapping.first_name_col].notna()
+    )
     if not valid_rows.any():
-        return False, f"Aucun élève valide trouvé dans {class_type} (nom et prénom manquants)"
-    
-    logging.info(f"Validation réussie pour {class_type}: {valid_rows.sum()} élèves valides trouvés")
+        return False, (
+            f"Aucun élève valide trouvé dans {mapping.class_name} "
+            f"(nom et prénom manquants)"
+        )
+
+    logging.info(
+        f"Validation réussie pour {mapping.class_name}: "
+        f"{valid_rows.sum()} élèves valides trouvés"
+    )
     return True, "OK"
 
 
-def validate_excel_file(excel_path: str) -> Tuple[bool, str, List[str]]:
+def validate_excel_file(
+    excel_path: str, mappings: List[SheetColumnMapping]
+) -> Tuple[bool, str, List[str]]:
     """Validate an Excel file for bulletin generation.
-    
+
     Args:
         excel_path: Path to the Excel file
-        
+        mappings: Column mappings for each worksheet to validate
+
     Returns:
         Tuple of (is_valid, error_message, valid_sheets)
     """
@@ -83,19 +74,19 @@ def validate_excel_file(excel_path: str) -> Tuple[bool, str, List[str]]:
         xl = pd.ExcelFile(excel_path)
     except Exception as e:
         return False, f"Erreur lors de la lecture du fichier Excel: {e}", []
-    
-    # Check if file has at least one valid sheet
-    valid_sheets = [sheet for sheet in EXCEL_CONFIG.VALID_SHEET_NAMES if sheet in xl.sheet_names]
-    
-    if not valid_sheets:
-        return False, f"Aucun onglet valide trouvé. Onglets requis: {', '.join(EXCEL_CONFIG.VALID_SHEET_NAMES)}", []
-    
-    # Validate structure of each sheet
-    for sheet_name in valid_sheets:
-        df = pd.read_excel(excel_path, sheet_name=sheet_name)
-        is_valid, error_msg = validate_excel_structure(df, sheet_name)
+
+    if not mappings:
+        return False, "Aucune feuille à valider.", []
+
+    valid_sheets: List[str] = []
+    for mapping in mappings:
+        if mapping.class_name not in xl.sheet_names:
+            return False, f"Onglet introuvable: {mapping.class_name}", []
+
+        df = pd.read_excel(excel_path, sheet_name=mapping.class_name)
+        is_valid, error_msg = validate_excel_structure(df, mapping)
         if not is_valid:
             return False, error_msg, []
-    
-    return True, "OK", valid_sheets
+        valid_sheets.append(mapping.class_name)
 
+    return True, "OK", valid_sheets

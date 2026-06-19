@@ -6,30 +6,6 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class ExcelColumnConfig:
-    """Configuration for Excel file structure."""
-
-    # ECG2 (First year) column names
-    ECG2_COMPREHENSION_COLS: List[str] = (
-        "CB1 Compréhension",
-        "CB2 Compréhension",
-        "CB3 Compréhension",
-    )
-    ECG2_ESSAI_COLS: List[str] = ("Essai", "Essai.1", "Essai.2")
-    ECG2_TRADUCTION_COLS: List[str] = ("Traduction", "Traduction.1", "Traduction.2")
-    ECG2_MOYENNE_COLS: List[str] = ("Moyenne CB1", "Moyenne CB2", "Moyenne CB3")
-
-    # KE4 (Second year) column names
-    KE4_SYNTHESE_COLS: List[str] = ("CB1 Synthèse", "CB2 Synthèse", "CB3 Synthèse")
-    KE4_ESSAI_COLS: List[str] = ("Essai", "Essai.1", "Essai.2")
-    KE4_TRADUCTION_COLS: List[str] = ("Traduction", "Traduction.1", "Traduction.2")
-    KE4_MOYENNE_COLS: List[str] = ("Moyenne CB1", "Moyenne CB2", "Moyenne CB3")
-
-    # Valid sheet names
-    VALID_SHEET_NAMES: List[str] = ("ECG2", "KE4")
-
-
-@dataclass(frozen=True)
 class AppConfig:
     """General application configuration."""
 
@@ -59,6 +35,5 @@ class AppConfig:
     VALID_LOG_LEVELS: List[str] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
-# Singleton instances
-EXCEL_CONFIG = ExcelColumnConfig()
+# Singleton instance
 APP_CONFIG = AppConfig()

@@ -12,7 +12,7 @@ import os
 import logging
 import argparse
 import httpx
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from openai import (
     OpenAI,
     APIError as OpenAIAPIError,
@@ -22,7 +22,8 @@ from openai import (
 from pydantic import BaseModel, Field
 
 from config import APP_CONFIG
-from validators import validate_excel_file
+from column_mapping import SheetColumnMapping, auto_detect_column_mapping, compute_block_moyenne
+from validators import validate_excel_file, validate_excel_structure
 
 
 class StudentEvaluation(BaseModel):
@@ -92,19 +93,21 @@ def calculate_general_average(
     return sum(grades) / len(grades)
 
 
-def extract_student_data(row: pd.Series, class_type: str) -> Optional[Dict]:
+def extract_student_data(
+    row: pd.Series, mapping: SheetColumnMapping
+) -> Optional[Dict]:
     """Extrait les données d'un élève depuis une ligne du DataFrame.
 
     Args:
         row: Ligne du DataFrame pandas contenant les données de l'élève
-        class_type: Nom de la classe (utilisé comme label, la structure est auto-détectée)
+        mapping: Correspondance des colonnes pour la feuille
 
     Returns:
         Dictionnaire contenant les données de l'élève, ou None si invalide
     """
-    student_num = row.iloc[0]
-    last_name = row.iloc[1]
-    first_name = row.iloc[2]
+    student_num = row.iloc[mapping.student_num_col]
+    last_name = row.iloc[mapping.last_name_col]
+    first_name = row.iloc[mapping.first_name_col]
 
     # Skip rows that are summary rows (averages, etc.) - check this FIRST
     # before checking for missing names
@@ -120,98 +123,45 @@ def extract_student_data(row: pd.Series, class_type: str) -> Optional[Dict]:
     if pd.isna(last_name) or pd.isna(first_name):
         return None
 
-    # Auto-detect structure: check for "Compréhension" vs "Synthèse"
-    has_comprehension = "CB1 Compréhension" in row.index
-    has_synthese = "CB1 Synthèse" in row.index
+    assessments: List[Dict] = []
+    for block in mapping.blocks:
+        main = row.get(block.main_exercise_col)
+        essai = row.get(block.essai_col)
+        traduction = row.get(block.traduction_col)
 
-    if has_comprehension:
-        # First year structure: Compréhension, Essai, Traduction
-        cb1_comp = row.get("CB1 Compréhension")
-        cb1_essai = row.get("Essai")
-        cb1_trad = row.get("Traduction")
-        cb1_moy = row.get("Moyenne CB1")
+        if block.moyenne_col:
+            moyenne = row.get(block.moyenne_col)
+        else:
+            moyenne = compute_block_moyenne(main, essai, traduction)
 
-        cb2_comp = row.get("CB2 Compréhension")
-        cb2_essai = row.get("Essai.1")
-        cb2_trad = row.get("Traduction.1")
-        cb2_moy = row.get("Moyenne CB2")
+        assessments.append(
+            {
+                "label": block.label,
+                "main_type": block.main_exercise_type,
+                "main": main,
+                "essai": essai,
+                "traduction": traduction,
+                "moyenne": moyenne,
+            }
+        )
 
-        cb3_comp = row.get("CB3 Compréhension")
-        cb3_essai = row.get("Essai.2")
-        cb3_trad = row.get("Traduction.2")
-        cb3_moy = row.get("Moyenne CB3")
+    return {
+        "num": student_num,
+        "nom": last_name,
+        "prenom": first_name,
+        "class_name": mapping.class_name,
+        "assessments": assessments,
+    }
 
-        return {
-            "num": student_num,
-            "nom": last_name,
-            "prenom": first_name,
-            "cb1": {
-                "comprehension": cb1_comp,
-                "essai": cb1_essai,
-                "traduction": cb1_trad,
-                "moyenne": cb1_moy,
-            },
-            "cb2": {
-                "comprehension": cb2_comp,
-                "essai": cb2_essai,
-                "traduction": cb2_trad,
-                "moyenne": cb2_moy,
-            },
-            "cb3": {
-                "comprehension": cb3_comp,
-                "essai": cb3_essai,
-                "traduction": cb3_trad,
-                "moyenne": cb3_moy,
-            },
-            "type": class_type,
-            "structure": "comprehension",
-        }
-    elif has_synthese:
-        # Second year structure: Synthèse, Essai, Traduction
-        cb1_synth = row.get("CB1 Synthèse")
-        cb1_essai = row.get("Essai")
-        cb1_trad = row.get("Traduction")
-        cb1_moy = row.get("Moyenne CB1")
 
-        cb2_synth = row.get("CB2 Synthèse")
-        cb2_essai = row.get("Essai.1")
-        cb2_trad = row.get("Traduction.1")
-        cb2_moy = row.get("Moyenne CB2")
+def _main_exercise_label(main_type: str) -> str:
+    """Return the French label for a main exercise type."""
+    return "Compréhension" if main_type == "comprehension" else "Synthèse"
 
-        cb3_synth = row.get("CB3 Synthèse")
-        cb3_essai = row.get("Essai.2")
-        cb3_trad = row.get("Traduction.2")
-        cb3_moy = row.get("Moyenne CB3")
 
-        return {
-            "num": student_num,
-            "nom": last_name,
-            "prenom": first_name,
-            "cb1": {
-                "synthese": cb1_synth,
-                "essai": cb1_essai,
-                "traduction": cb1_trad,
-                "moyenne": cb1_moy,
-            },
-            "cb2": {
-                "synthese": cb2_synth,
-                "essai": cb2_essai,
-                "traduction": cb2_trad,
-                "moyenne": cb2_moy,
-            },
-            "cb3": {
-                "synthese": cb3_synth,
-                "essai": cb3_essai,
-                "traduction": cb3_trad,
-                "moyenne": cb3_moy,
-            },
-            "type": class_type,
-            "structure": "synthese",
-        }
-    else:
-        # Unknown structure - return None
-        logging.warning(f"Unknown structure for class {class_type}, row {student_num}")
-        return None
+def _format_grade(value: Any) -> str:
+    """Format a grade value for the prompt."""
+    return f"{value}" if pd.notna(value) else "ABS"
 
 
 def format_student_data_for_prompt(student_data: Dict) -> str:
@@ -227,57 +177,30 @@ def format_student_data_for_prompt(student_data: Dict) -> str:
         f"Formatage des données pour {student_data['prenom']} {student_data['nom']}"
     )
     lines = [f"Élève: {student_data['prenom']} {student_data['nom']}"]
+    lines.append(f"Classe: {student_data['class_name']}")
+    lines.append("\nRésultats des évaluations:")
 
-    if student_data["type"] == "ECG2":
-        lines.append("Classe: ECG2 (Première année)")
-        exercise_type = "Compréhension"
-    else:
-        lines.append("Classe: KE4 (Deuxième année)")
-        exercise_type = "Synthèse"
+    for assessment in student_data["assessments"]:
+        moy = assessment.get("moyenne")
+        if pd.isna(moy):
+            continue
 
-    lines.append("\nRésultats des concours blancs:")
+        exercise_label = _main_exercise_label(assessment["main_type"])
+        main_str = _format_grade(assessment.get("main"))
+        essai_str = _format_grade(assessment.get("essai"))
+        trad_str = _format_grade(assessment.get("traduction"))
+        lines.append(
+            f"  {assessment['label']}: {exercise_label}={main_str}, "
+            f"Essai={essai_str}, Traduction={trad_str}, Moyenne={moy}"
+        )
 
-    for cb_num, cb_data in [
-        ("CB1", student_data["cb1"]),
-        ("CB2", student_data["cb2"]),
-        ("CB3", student_data["cb3"]),
-    ]:
-        if student_data["type"] == "ECG2":
-            comp = cb_data.get("comprehension")
-            essai = cb_data.get("essai")
-            trad = cb_data.get("traduction")
-            moy = cb_data.get("moyenne")
-
-            if pd.notna(moy):
-                comp_str = f"{comp}" if pd.notna(comp) else "ABS"
-                essai_str = f"{essai}" if pd.notna(essai) else "ABS"
-                trad_str = f"{trad}" if pd.notna(trad) else "ABS"
-                lines.append(
-                    f"  {cb_num}: {exercise_type}={comp_str}, Essai={essai_str}, Traduction={trad_str}, Moyenne={moy}"
-                )
-        else:  # KE4
-            synth = cb_data.get("synthese")
-            essai = cb_data.get("essai")
-            trad = cb_data.get("traduction")
-            moy = cb_data.get("moyenne")
-
-            if pd.notna(moy):
-                synth_str = f"{synth}" if pd.notna(synth) else "ABS"
-                essai_str = f"{essai}" if pd.notna(essai) else "ABS"
-                trad_str = f"{trad}" if pd.notna(trad) else "ABS"
-                lines.append(
-                    f"  {cb_num}: {exercise_type}={synth_str}, Essai={essai_str}, Traduction={trad_str}, Moyenne={moy}"
-                )
-
-    # Calculer la moyenne générale
-    moyennes = []
-    for cb_data in [student_data["cb1"], student_data["cb2"], student_data["cb3"]]:
-        moy = cb_data.get("moyenne")
+    moyennes: List[float] = []
+    for assessment in student_data["assessments"]:
+        moy = assessment.get("moyenne")
         if pd.notna(moy):
             try:
                 moyennes.append(float(moy))
             except (ValueError, TypeError):
-                # Ignorer les valeurs non numériques (comme "absent", "ABS", etc.)
                 pass
 
     if moyennes:
@@ -309,15 +232,13 @@ def generate_evaluation(
 
     student_info = format_student_data_for_prompt(student_data)
 
-    # Calculer la moyenne générale
-    moyennes = []
-    for cb_data in [student_data["cb1"], student_data["cb2"], student_data["cb3"]]:
-        moy = cb_data.get("moyenne")
+    moyennes: List[float] = []
+    for assessment in student_data["assessments"]:
+        moy = assessment.get("moyenne")
         if pd.notna(moy):
             try:
                 moyennes.append(float(moy))
             except (ValueError, TypeError):
-                # Ignorer les valeurs non numériques (comme "absent", "ABS", etc.)
                 pass
 
     for attempt in range(max_retries):
@@ -469,8 +390,7 @@ Génère une remarque de bulletin individualisée en français, dans un style na
 def process_class(
     client: OpenAI,
     df: pd.DataFrame,
-    class_name: str,
-    class_type: str,
+    mapping: SheetColumnMapping,
     model: str = APP_CONFIG.DEFAULT_MODEL,
     temperature: float = APP_CONFIG.DEFAULT_TEMPERATURE,
     max_students: Optional[int] = None,
@@ -480,8 +400,7 @@ def process_class(
     Args:
         client: Client OpenAI initialisé
         df: DataFrame pandas contenant les données de la classe
-        class_name: Nom de la classe (ECG2 ou KE4)
-        class_type: Type de classe (ECG2 ou KE4)
+        mapping: Correspondance des colonnes pour la feuille
         model: Modèle OpenAI à utiliser
         temperature: Température pour la génération
         max_students: Nombre maximum d'élèves à traiter (pour tests)
@@ -491,6 +410,7 @@ def process_class(
     """
     evaluations: List[Tuple[str, str]] = []
     student_count = 0
+    class_name = mapping.class_name
 
     logging.info(f"Début du traitement de la classe {class_name}")
     logging.debug(f"Nombre total d'élèves dans le DataFrame: {len(df)}")
@@ -504,7 +424,7 @@ def process_class(
             )
             break
 
-        student_data = extract_student_data(row, class_type)
+        student_data = extract_student_data(row, mapping)
 
         if student_data is None:
             logging.debug("Ligne ignorée (données d'élève invalides)")
@@ -531,7 +451,7 @@ def main() -> None:
     )
     parser.add_argument(
         "excel_file",
-        help="Fichier Excel contenant les notes des élèves (onglets ECG2 et KE4)",
+        help="Fichier Excel contenant une feuille par classe",
     )
     parser.add_argument(
         "--log-level",
@@ -574,24 +494,7 @@ def main() -> None:
         logging.error(f"Le fichier {excel_file} n'existe pas.")
         sys.exit(1)
 
-    # Validate Excel file structure
-    logging.info("Validation de la structure du fichier Excel...")
-    is_valid, error_msg, valid_sheets = validate_excel_file(excel_file)
-    if not is_valid:
-        logging.error(f"Validation échouée: {error_msg}")
-        sys.exit(1)
-
-    logging.info(f"Validation réussie. Onglets valides: {', '.join(valid_sheets)}")
-
-    # Initialiser le client OpenAI
-    try:
-        client = get_openai_client()
-    except ValueError as e:
-        logging.error(f"Erreur d'initialisation OpenAI: {e}")
-        logging.info("Veuillez définir la variable d'environnement OPENAI_API_KEY")
-        sys.exit(1)
-
-    # Lire le fichier Excel
+    # Lire le fichier Excel et détecter automatiquement les correspondances
     try:
         logging.info(f"Lecture du fichier Excel: {excel_file}")
         xl = pd.ExcelFile(excel_file)
@@ -600,36 +503,58 @@ def main() -> None:
         logging.error(f"Erreur lors de la lecture du fichier Excel: {e}", exc_info=True)
         sys.exit(1)
 
-    # Traiter chaque classe (use only validated sheets)
-    classes = {"ECG2": "ECG2", "KE4": "KE4"}
+    mappings: List[SheetColumnMapping] = []
+    for sheet_name in xl.sheet_names:
+        df_preview = pd.read_excel(excel_file, sheet_name=sheet_name)
+        mapping = auto_detect_column_mapping(df_preview, sheet_name)
+        mappings.append(mapping)
 
-    for class_name, class_type in classes.items():
-        if class_name not in valid_sheets:
-            logging.info(f"L'onglet {class_name} sera ignoré (non validé ou absent)")
+    logging.info("Validation de la structure du fichier Excel...")
+    is_valid, error_msg, valid_sheets = validate_excel_file(excel_file, mappings)
+    if not is_valid:
+        logging.error(f"Validation échouée: {error_msg}")
+        logging.info(
+            "Utilisez l'interface Streamlit pour ajuster manuellement les colonnes."
+        )
+        sys.exit(1)
+
+    logging.info(f"Validation réussie. Onglets valides: {', '.join(valid_sheets)}")
+
+    try:
+        client = get_openai_client()
+    except ValueError as e:
+        logging.error(f"Erreur d'initialisation OpenAI: {e}")
+        logging.info("Veuillez définir la variable d'environnement OPENAI_API_KEY")
+        sys.exit(1)
+
+    for mapping in mappings:
+        if mapping.class_name not in valid_sheets:
             continue
 
-        logging.info(f"Début du traitement de la classe {class_name}")
-        df = pd.read_excel(excel_file, sheet_name=class_name)
-        logging.debug(f"DataFrame {class_name} chargé: {len(df)} lignes")
+        logging.info(f"Début du traitement de la classe {mapping.class_name}")
+        df = pd.read_excel(excel_file, sheet_name=mapping.class_name)
+        logging.debug(f"DataFrame {mapping.class_name} chargé: {len(df)} lignes")
 
         evaluations = process_class(
             client,
             df,
-            class_name,
-            class_type,
+            mapping,
             args.model,
             args.temperature,
             args.max_students,
         )
 
-        # Écrire le fichier de sortie
-        output_file = APP_CONFIG.OUTPUT_FILE_PATTERN.format(class_name=class_name)
+        output_file = APP_CONFIG.OUTPUT_FILE_PATTERN.format(
+            class_name=mapping.class_name
+        )
         logging.info(f"Écriture du fichier de sortie: {output_file}")
         with open(output_file, "w", encoding="utf-8") as f:
             for student_name, eval_text in evaluations:
                 f.write(f"{student_name}: {eval_text}\n\n")
 
-        logging.info(f"Fichier généré: {output_file} ({len(evaluations)} évaluations)")
+        logging.info(
+            f"Fichier généré: {output_file} ({len(evaluations)} évaluations)"
+        )
 
 
 if __name__ == "__main__":
