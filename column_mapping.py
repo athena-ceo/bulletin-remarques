@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 import pandas as pd
 
 MainExerciseType = Literal["comprehension", "synthese"]
+ColumnRole = Literal["main", "essai", "traduction", "moyenne", "simple"]
 
 BLOCK_PREFIX_RE = re.compile(r"(?i)(CB|DST)\s*(\d+)")
 COMPREHENSION_RE = re.compile(r"compr[eé]hension", re.IGNORECASE)
-SYNTHESE_RE = re.compile(r"synth[eè]se", re.IGNORECASE)
+SYNTHESE_RE = re.compile(r"synth[eè]se|\bsyn\b", re.IGNORECASE)
 ESSAI_RE = re.compile(r"^essai(?:\.(\d+))?$", re.IGNORECASE)
 TRADUCTION_RE = re.compile(r"^traduction(?:\.(\d+))?$", re.IGNORECASE)
 MOYENNE_RE = re.compile(r"moyenne", re.IGNORECASE)
+RATTRAPAGE_RE = re.compile(r"rattrapage", re.IGNORECASE)
+SIMPLE_CB_RE = re.compile(r"(?i)^CB\s*\d+\s*$")
+STUDENT_INFO_RE = re.compile(r"^unnamed", re.IGNORECASE)
 
 
 @dataclass
@@ -29,12 +34,24 @@ class AssessmentBlockMapping:
     traduction_col: str
     moyenne_col: Optional[str] = None
 
+    def is_simple(self) -> bool:
+        """Return True when the block is a single-grade column."""
+        if self.essai_col or self.traduction_col:
+            return False
+        if RATTRAPAGE_RE.search(self.main_exercise_col):
+            return True
+        return bool(SIMPLE_CB_RE.fullmatch(self.main_exercise_col.strip()))
+
     def required_columns(self) -> List[str]:
         """Return Excel columns required for this block."""
-        cols = [self.main_exercise_col, self.essai_col, self.traduction_col]
+        cols = [self.main_exercise_col]
+        if self.essai_col:
+            cols.append(self.essai_col)
+        if self.traduction_col:
+            cols.append(self.traduction_col)
         if self.moyenne_col:
             cols.append(self.moyenne_col)
-        return cols
+        return [col for col in cols if col]
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize block mapping for session state."""
@@ -54,8 +71,8 @@ class AssessmentBlockMapping:
             label=str(data["label"]),
             main_exercise_col=str(data["main_exercise_col"]),
             main_exercise_type=data["main_exercise_type"],
-            essai_col=str(data["essai_col"]),
-            traduction_col=str(data["traduction_col"]),
+            essai_col=str(data.get("essai_col", "")),
+            traduction_col=str(data.get("traduction_col", "")),
             moyenne_col=data.get("moyenne_col"),
         )
 
@@ -113,29 +130,13 @@ def _suffix_order(name: str, pattern: re.Pattern[str]) -> int:
     return 0 if suffix is None else int(suffix)
 
 
-def _block_sort_key(label: str) -> Tuple[str, int]:
-    """Sort CB1, CB2, DST1, DST2 in a stable order."""
-    match = BLOCK_PREFIX_RE.search(label)
-    if not match:
-        return ("ZZ", 999)
-    return (match.group(1).upper(), int(match.group(2)))
-
-
-def _infer_main_exercise_type(column_name: str) -> Optional[MainExerciseType]:
+def _infer_main_exercise_type(column_name: str) -> MainExerciseType:
     """Infer comprehension vs synthèse from a column header."""
     if COMPREHENSION_RE.search(column_name):
         return "comprehension"
     if SYNTHESE_RE.search(column_name):
         return "synthese"
-    return None
-
-
-def _block_label_from_column(column_name: str) -> Optional[str]:
-    """Extract CB1 / DST2 label from a column header."""
-    match = BLOCK_PREFIX_RE.search(column_name)
-    if not match:
-        return None
-    return f"{match.group(1).upper()}{match.group(2)}"
+    return "comprehension"
 
 
 def _column_matches_exercise(column_name: str, exercise: str) -> bool:
@@ -148,34 +149,47 @@ def _column_matches_exercise(column_name: str, exercise: str) -> bool:
     return False
 
 
-def _find_exercise_column(columns: Sequence[str], exercise: str) -> Optional[str]:
-    """Pick Essai or Traduction column from block candidates."""
-    for col in columns:
-        if _column_matches_exercise(col, exercise):
-            return col
-    return None
+def _block_label_from_number(prefix: str, number: str) -> str:
+    """Build a normalized CB1 / DST2 label."""
+    return f"{prefix.upper()}{number}"
 
 
-def _find_main_column(columns: Sequence[str]) -> Optional[str]:
-    """Pick the main exercise column from a list of candidate headers."""
-    for col in columns:
-        if _infer_main_exercise_type(col) is not None:
-            return col
-    return None
+def _classify_grade_column(column_name: str) -> Optional[Tuple[str, ColumnRole]]:
+    """Classify a worksheet column into an assessment block and role."""
+    col = column_name.strip()
+    if not col or STUDENT_INFO_RE.match(col):
+        return None
 
+    if RATTRAPAGE_RE.search(col):
+        return ("CB rattrapage", "simple")
 
-def _find_moyenne_column(columns: Sequence[str], label: str) -> Optional[str]:
-    """Pick the moyenne column for a block."""
-    label_match = BLOCK_PREFIX_RE.search(label)
-    for col in columns:
-        if not MOYENNE_RE.search(col):
-            continue
-        col_label = _block_label_from_column(col)
-        if col_label == label:
-            return col
-    for col in columns:
-        if MOYENNE_RE.search(col) and label.lower() in col.lower():
-            return col
+    if MOYENNE_RE.search(col):
+        numbered = BLOCK_PREFIX_RE.search(col)
+        if numbered:
+            label = _block_label_from_number(numbered.group(1), numbered.group(2))
+            return (label, "moyenne")
+        if re.search(r"\bDST\b", col, re.IGNORECASE):
+            return ("DST", "moyenne")
+        return None
+
+    if re.match(r"(?i)^DST\b", col):
+        if _column_matches_exercise(col, "essai"):
+            return ("DST", "essai")
+        if _column_matches_exercise(col, "traduction"):
+            return ("DST", "traduction")
+        return ("DST", "main")
+
+    numbered = BLOCK_PREFIX_RE.search(col)
+    if numbered:
+        label = _block_label_from_number(numbered.group(1), numbered.group(2))
+        if _column_matches_exercise(col, "essai"):
+            return (label, "essai")
+        if _column_matches_exercise(col, "traduction"):
+            return (label, "traduction")
+        if SIMPLE_CB_RE.fullmatch(col):
+            return (label, "simple")
+        return (label, "main")
+
     return None
 
 
@@ -187,81 +201,184 @@ def _ordered_duplicate_columns(
     return sorted(matched, key=lambda name: _suffix_order(name, pattern))
 
 
+def _build_block_mapping(
+    label: str, roles: Dict[str, str]
+) -> Optional[AssessmentBlockMapping]:
+    """Build one block mapping from grouped column roles."""
+    main_col = roles.get("main") or roles.get("simple", "")
+    essai_col = roles.get("essai", "")
+    traduction_col = roles.get("traduction", "")
+    moyenne_col = roles.get("moyenne")
+
+    if not main_col and not essai_col and not traduction_col and not moyenne_col:
+        return None
+
+    if not main_col and moyenne_col:
+        main_col = moyenne_col
+        moyenne_col = None
+
+    if not main_col:
+        return None
+
+    main_type = _infer_main_exercise_type(main_col)
+
+    return AssessmentBlockMapping(
+        label=label,
+        main_exercise_col=main_col,
+        main_exercise_type=main_type,
+        essai_col=essai_col,
+        traduction_col=traduction_col,
+        moyenne_col=moyenne_col,
+    )
+
+
+def _legacy_fallback_blocks(columns: Sequence[str]) -> List[AssessmentBlockMapping]:
+    """Detect legacy layouts with Essai / Essai.1 duplicate headers."""
+    block_columns: Dict[str, List[str]] = {}
+    for col in columns:
+        label_match = BLOCK_PREFIX_RE.search(col)
+        if not label_match:
+            continue
+        label = _block_label_from_number(label_match.group(1), label_match.group(2))
+        block_columns.setdefault(label, []).append(col)
+
+    if not block_columns:
+        return []
+
+    essai_cols = _ordered_duplicate_columns(columns, ESSAI_RE)
+    traduction_cols = _ordered_duplicate_columns(columns, TRADUCTION_RE)
+    labels = sorted(
+        block_columns.keys(),
+        key=lambda label: min(columns.index(col) for col in block_columns[label]),
+    )
+
+    blocks: List[AssessmentBlockMapping] = []
+    for index, label in enumerate(labels):
+        candidates = block_columns[label]
+        main_col = next(
+            (
+                col
+                for col in candidates
+                if not _column_matches_exercise(col, "essai")
+                and not _column_matches_exercise(col, "traduction")
+                and not MOYENNE_RE.search(col)
+            ),
+            "",
+        )
+
+        essai_col = next(
+            (col for col in candidates if _column_matches_exercise(col, "essai")),
+            essai_cols[index] if index < len(essai_cols) else "",
+        )
+        traduction_col = next(
+            (col for col in candidates if _column_matches_exercise(col, "traduction")),
+            traduction_cols[index] if index < len(traduction_cols) else "",
+        )
+        moyenne_col = next((col for col in candidates if MOYENNE_RE.search(col)), None)
+
+        block = _build_block_mapping(
+            label,
+            {
+                "main": main_col,
+                "essai": essai_col,
+                "traduction": traduction_col,
+                "moyenne": moyenne_col or "",
+            },
+        )
+        if block:
+            blocks.append(block)
+
+    return blocks
+
+
+def _assign_legacy_duplicate_columns(
+    blocks: List[AssessmentBlockMapping], columns: Sequence[str]
+) -> List[AssessmentBlockMapping]:
+    """Fill missing Essai/Traduction columns from legacy duplicate headers."""
+    essai_cols = _ordered_duplicate_columns(columns, ESSAI_RE)
+    traduction_cols = _ordered_duplicate_columns(columns, TRADUCTION_RE)
+    essai_index = 0
+    traduction_index = 0
+    updated_blocks: List[AssessmentBlockMapping] = []
+
+    for block in blocks:
+        essai_col = block.essai_col
+        traduction_col = block.traduction_col
+
+        if not block.is_simple():
+            if not essai_col and essai_index < len(essai_cols):
+                essai_col = essai_cols[essai_index]
+                essai_index += 1
+            if not traduction_col and traduction_index < len(traduction_cols):
+                traduction_col = traduction_cols[traduction_index]
+                traduction_index += 1
+
+        updated_blocks.append(
+            AssessmentBlockMapping(
+                label=block.label,
+                main_exercise_col=block.main_exercise_col,
+                main_exercise_type=block.main_exercise_type,
+                essai_col=essai_col,
+                traduction_col=traduction_col,
+                moyenne_col=block.moyenne_col,
+            )
+        )
+
+    return updated_blocks
+
+
 def auto_detect_column_mapping(
     df: pd.DataFrame, sheet_name: str
 ) -> SheetColumnMapping:
     """Suggest a column mapping from worksheet headers.
 
-    Uses CB/DST prefixes when present and falls back to ordered Essai/Traduction
-    columns for blocks that share unprefixed duplicate headers.
+    Supports numbered CB/DST blocks, unnumbered DST blocks, abbreviated Syn
+    headers, legacy Essai/Traduction duplicates, and single-grade columns
+    such as CB5 or CB de rattrapage.
     """
     columns = _column_names(df)
-    block_columns: Dict[str, List[str]] = {}
+    grouped_roles: Dict[str, Dict[str, str]] = defaultdict(dict)
+    first_index: Dict[str, int] = {}
 
-    for col in columns:
-        label = _block_label_from_column(col)
-        if label:
-            block_columns.setdefault(label, []).append(col)
-
-    for col in columns:
-        if not MOYENNE_RE.search(col):
+    for index, col in enumerate(columns):
+        parsed = _classify_grade_column(col)
+        if parsed is None:
             continue
-        label = _block_label_from_column(col)
-        if label:
-            block_columns.setdefault(label, []).append(col)
-
-    labels = sorted(block_columns.keys(), key=_block_sort_key)
-    essai_cols = _ordered_duplicate_columns(columns, ESSAI_RE)
-    traduction_cols = _ordered_duplicate_columns(columns, TRADUCTION_RE)
+        label, role = parsed
+        grouped_roles[label][role] = col
+        first_index.setdefault(label, index)
 
     blocks: List[AssessmentBlockMapping] = []
-    for index, label in enumerate(labels):
-        candidates = block_columns.get(label, [])
-        main_col = _find_main_column(candidates)
-        moyenne_col = _find_moyenne_column(candidates, label)
+    for label in sorted(grouped_roles.keys(), key=lambda item: first_index[item]):
+        block = _build_block_mapping(label, grouped_roles[label])
+        if block:
+            blocks.append(block)
 
-        essai_col = _find_exercise_column(candidates, "essai") or (
-            essai_cols[index] if index < len(essai_cols) else ""
-        )
-        traduction_col = _find_exercise_column(candidates, "traduction") or (
-            traduction_cols[index] if index < len(traduction_cols) else ""
-        )
+    if not blocks:
+        blocks = _legacy_fallback_blocks(columns)
 
-        main_type: MainExerciseType = "comprehension"
-        if main_col:
-            inferred = _infer_main_exercise_type(main_col)
-            if inferred:
-                main_type = inferred
-
-        if not main_col and not essai_col and not traduction_col and not moyenne_col:
-            continue
-
-        blocks.append(
-            AssessmentBlockMapping(
-                label=label,
-                main_exercise_col=main_col or "",
-                main_exercise_type=main_type,
-                essai_col=essai_col or "",
-                traduction_col=traduction_col or "",
-                moyenne_col=moyenne_col,
-            )
-        )
-
-    if not blocks and (essai_cols or traduction_cols):
-        count = max(len(essai_cols), len(traduction_cols), 2)
-        for index in range(count):
-            blocks.append(
-                AssessmentBlockMapping(
-                    label=f"CB{index + 1}",
-                    main_exercise_col="",
-                    main_exercise_type="comprehension",
-                    essai_col=essai_cols[index] if index < len(essai_cols) else "",
-                    traduction_col=(
-                        traduction_cols[index] if index < len(traduction_cols) else ""
-                    ),
-                    moyenne_col=None,
+    if not blocks:
+        essai_cols = _ordered_duplicate_columns(columns, ESSAI_RE)
+        traduction_cols = _ordered_duplicate_columns(columns, TRADUCTION_RE)
+        if essai_cols or traduction_cols:
+            count = max(len(essai_cols), len(traduction_cols), 2)
+            for index in range(count):
+                blocks.append(
+                    AssessmentBlockMapping(
+                        label=f"CB{index + 1}",
+                        main_exercise_col="",
+                        main_exercise_type="comprehension",
+                        essai_col=essai_cols[index] if index < len(essai_cols) else "",
+                        traduction_col=(
+                            traduction_cols[index]
+                            if index < len(traduction_cols)
+                            else ""
+                        ),
+                        moyenne_col=None,
+                    )
                 )
-            )
+    else:
+        blocks = _assign_legacy_duplicate_columns(blocks, columns)
 
     return SheetColumnMapping(class_name=sheet_name, blocks=blocks)
 
@@ -293,6 +410,10 @@ def mapping_is_complete(mapping: SheetColumnMapping) -> Tuple[bool, str]:
             return False, "Chaque bloc doit avoir un libellé (ex. CB1, DST2)."
         if not block.main_exercise_col:
             return False, f"{block.label}: colonne d'exercice principal manquante."
+
+        if block.is_simple():
+            continue
+
         if not block.essai_col:
             return False, f"{block.label}: colonne Essai manquante."
         if not block.traduction_col:

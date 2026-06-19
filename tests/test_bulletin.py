@@ -147,6 +147,66 @@ class TestAutoDetectColumnMapping:
         assert mapping.blocks[0].main_exercise_type == "synthese"
         assert mapping.blocks[1].moyenne_col is None
 
+    def test_detects_ecg2_second_semester_layout(self):
+        """Match the 2025-26 second semester ECG2 sheet layout."""
+        df = pd.DataFrame(
+            {
+                "Unnamed: 0": [1.0],
+                "Unnamed: 1": ["BAUME"],
+                "Unnamed: 2": ["CHLOE"],
+                "CB3 Syn": [11.0],
+                "CB 3 Essai": [10.0],
+                "CB3 traduction": [6.0],
+                "CB 3 Moyenne": [9.5],
+                "DST Synthèse": [14.0],
+                "DST Essai": [8.0],
+                "DST Traduction": [6.0],
+                "Moyenne DST": [9.4],
+                "CB5": [10.6],
+                "CB de rattrapage": [11.0],
+            }
+        )
+
+        mapping = auto_detect_column_mapping(df, "ECG2")
+
+        assert mapping_is_complete(mapping) == (True, "OK")
+        assert [block.label for block in mapping.blocks] == [
+            "CB3",
+            "DST",
+            "CB5",
+            "CB rattrapage",
+        ]
+        assert mapping.blocks[0].main_exercise_col == "CB3 Syn"
+        assert mapping.blocks[0].main_exercise_type == "synthese"
+        assert mapping.blocks[1].moyenne_col == "Moyenne DST"
+        assert mapping.blocks[2].is_simple()
+        assert mapping.blocks[3].is_simple()
+
+    def test_detects_ke4_second_semester_layout(self):
+        """Match the 2025-26 second semester KE4 sheet layout."""
+        df = pd.DataFrame(
+            {
+                "Unnamed: 0": [1.0],
+                "Unnamed: 1": ["BESNARD"],
+                "Unnamed: 2": ["CLOVIS"],
+                "DST Synthèse": [12.0],
+                "DST Essai": [7.0],
+                "DST Traduction": [9.5],
+                "DST Moyenne": [9.0],
+                "CB4 synthèse": [14.0],
+                "CB4 Essai": [12.0],
+                "CB4 Traduction": [7.0],
+                "CB 4 Moyenne": [11.6],
+            }
+        )
+
+        mapping = auto_detect_column_mapping(df, "KE4")
+
+        assert mapping_is_complete(mapping) == (True, "OK")
+        assert [block.label for block in mapping.blocks] == ["DST", "CB4"]
+        assert mapping.blocks[0].moyenne_col == "DST Moyenne"
+        assert mapping.blocks[1].main_exercise_col == "CB4 synthèse"
+
 
 class TestExtractStudentData:
     """Tests for extract_student_data function."""

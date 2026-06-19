@@ -126,8 +126,8 @@ def extract_student_data(
     assessments: List[Dict] = []
     for block in mapping.blocks:
         main = row.get(block.main_exercise_col)
-        essai = row.get(block.essai_col)
-        traduction = row.get(block.traduction_col)
+        essai = row.get(block.essai_col) if block.essai_col else pd.NA
+        traduction = row.get(block.traduction_col) if block.traduction_col else pd.NA
 
         if block.moyenne_col:
             moyenne = row.get(block.moyenne_col)
@@ -185,12 +185,17 @@ def format_student_data_for_prompt(student_data: Dict) -> str:
         if pd.isna(moy):
             continue
 
+        label = assessment["label"]
+        if pd.isna(assessment.get("essai")) and pd.isna(assessment.get("traduction")):
+            lines.append(f"  {label}: Moyenne={moy}")
+            continue
+
         exercise_label = _main_exercise_label(assessment["main_type"])
         main_str = _format_grade(assessment.get("main"))
         essai_str = _format_grade(assessment.get("essai"))
         trad_str = _format_grade(assessment.get("traduction"))
         lines.append(
-            f"  {assessment['label']}: {exercise_label}={main_str}, "
+            f"  {label}: {exercise_label}={main_str}, "
             f"Essai={essai_str}, Traduction={trad_str}, Moyenne={moy}"
         )
 
