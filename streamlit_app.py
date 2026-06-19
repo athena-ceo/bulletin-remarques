@@ -460,11 +460,11 @@ def main() -> None:
                             )
                             with st.spinner(f"Génération pour {student_name}..."):
                                 try:
-                                evaluation = generate_evaluation(
-                                    st.session_state.client,
-                                    student_data,
-                                    model,
-                                )
+                                    evaluation = generate_evaluation(
+                                        st.session_state.client,
+                                        student_data,
+                                        model,
+                                    )
                                 except Exception as e:
                                     logging.error(
                                         f"Error for {student_name}: {e}",
