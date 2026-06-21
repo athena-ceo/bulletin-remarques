@@ -34,6 +34,38 @@ class StudentEvaluation(BaseModel):
     )
 
 
+def _parse_evaluation_response(response: Any) -> Optional[StudentEvaluation]:
+    """Extract a parsed StudentEvaluation from a Responses API result.
+
+    GPT-5 models may emit reasoning items before the message output, so
+    response.output[0] is not reliably the assistant message.
+    """
+    output_parsed = getattr(response, "output_parsed", None)
+    if isinstance(output_parsed, StudentEvaluation):
+        return output_parsed
+
+    for output in getattr(response, "output", []) or []:
+        if getattr(output, "type", None) != "message":
+            continue
+        for content in getattr(output, "content", []) or []:
+            if getattr(content, "type", None) != "output_text":
+                continue
+
+            parsed = getattr(content, "parsed", None)
+            if isinstance(parsed, StudentEvaluation):
+                return parsed
+
+            text = getattr(content, "text", None)
+            if not text:
+                continue
+            try:
+                return StudentEvaluation.model_validate_json(text)
+            except Exception:
+                logging.debug("Impossible de parser le JSON de la réponse", exc_info=True)
+
+    return None
+
+
 def setup_logging(log_level: str) -> None:
     """Configure le système de logging.
 
@@ -304,52 +336,51 @@ Génère une remarque de bulletin individualisée en français, dans un style na
                 f"Réponse reçue de l'API pour {student_data['prenom']} {student_data['nom']}"
             )
 
-            # La méthode parse retourne un ParsedResponse
-            # La structure est: response.output[0].content[0].parsed
-            if hasattr(response, "output") and response.output:
-                if len(response.output) > 0:
-                    output_message = response.output[0]
-                    if hasattr(output_message, "content") and output_message.content:
-                        if len(output_message.content) > 0:
-                            output_text = output_message.content[0]
-                            if hasattr(output_text, "parsed"):
-                                parsed_eval = output_text.parsed
-                                if isinstance(parsed_eval, StudentEvaluation):
-                                    remarque = parsed_eval.remarque
-                                    remarque_length = len(remarque)
+            if getattr(response, "status", None) not in (None, "completed"):
+                error_detail = getattr(getattr(response, "error", None), "message", None)
+                logging.error(
+                    f"Réponse API incomplète pour {student_data['prenom']} {student_data['nom']}: "
+                    f"status={response.status}, error={error_detail}"
+                )
+                if attempt < max_retries - 1:
+                    continue
+                return "[Erreur: réponse API incomplète]"
 
-                                    # Vérifier la longueur
-                                    if remarque_length <= APP_CONFIG.MAX_REMARK_LENGTH:
-                                        logging.info(
-                                            f"Évaluation générée pour {student_data['prenom']} {student_data['nom']}: "
-                                            f"{remarque[:50]}... ({remarque_length} caractères)"
-                                        )
-                                        return remarque
-                                    else:
-                                        logging.warning(
-                                            f"Remarque trop longue pour {student_data['prenom']} {student_data['nom']}: "
-                                            f"{remarque_length} caractères (max: {APP_CONFIG.MAX_REMARK_LENGTH}). "
-                                            f"Tentative {attempt + 1}/{max_retries}"
-                                        )
-                                        if attempt < max_retries - 1:
-                                            continue  # Retry
-                                        else:
-                                            # Dernière tentative échouée, tronquer la remarque
-                                            logging.error(
-                                                f"Impossible de générer une remarque ≤ 200 caractères après {max_retries} tentatives. "
-                                                f"Troncature de la remarque."
-                                            )
-                                            return remarque[
-                                                : APP_CONFIG.MAX_REMARK_LENGTH
-                                            ]
+            parsed_eval = _parse_evaluation_response(response)
+            if parsed_eval is not None:
+                remarque = parsed_eval.remarque
+                remarque_length = len(remarque)
+
+                if remarque_length <= APP_CONFIG.MAX_REMARK_LENGTH:
+                    logging.info(
+                        f"Évaluation générée pour {student_data['prenom']} {student_data['nom']}: "
+                        f"{remarque[:50]}... ({remarque_length} caractères)"
+                    )
+                    return remarque
+
+                logging.warning(
+                    f"Remarque trop longue pour {student_data['prenom']} {student_data['nom']}: "
+                    f"{remarque_length} caractères (max: {APP_CONFIG.MAX_REMARK_LENGTH}). "
+                    f"Tentative {attempt + 1}/{max_retries}"
+                )
+                if attempt < max_retries - 1:
+                    continue
+                logging.error(
+                    f"Impossible de générer une remarque ≤ 200 caractères après {max_retries} tentatives. "
+                    f"Troncature de la remarque."
+                )
+                return remarque[: APP_CONFIG.MAX_REMARK_LENGTH]
 
             logging.error(
                 f"Structure de réponse inattendue pour {student_data['prenom']} {student_data['nom']}"
             )
-            logging.debug(f"Type de la réponse: {type(response)}")
-            logging.debug(
-                f"Attributs de la réponse: {[attr for attr in dir(response) if not attr.startswith('_')]}"
-            )
+            output_types = [
+                getattr(item, "type", type(item).__name__)
+                for item in getattr(response, "output", []) or []
+            ]
+            logging.debug(f"Types de sortie API: {output_types}")
+            if attempt < max_retries - 1:
+                continue
             return "[Erreur: réponse invalide - structure inattendue]"
 
         except httpx.TimeoutException as e:

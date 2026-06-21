@@ -16,6 +16,8 @@ from generate_evaluations import (
     calculate_general_average,
     extract_student_data,
     format_student_data_for_prompt,
+    _parse_evaluation_response,
+    StudentEvaluation,
 )
 from validators import validate_excel_structure
 
@@ -62,6 +64,34 @@ def _legacy_ke4_mapping(class_name: str = "KE4") -> SheetColumnMapping:
             )
         )
     return SheetColumnMapping(class_name=class_name, blocks=blocks)
+
+
+class TestParseEvaluationResponse:
+    """Tests for Responses API parsing helper."""
+
+    def test_parses_message_after_reasoning_output(self):
+        """GPT-5 may return reasoning items before the message."""
+
+        class FakeContent:
+            type = "output_text"
+            parsed = StudentEvaluation(remarque="Très bon travail.")
+            text = '{"remarque":"Très bon travail."}'
+
+        class FakeMessage:
+            type = "message"
+            content = [FakeContent()]
+
+        class FakeReasoning:
+            type = "reasoning"
+
+        class FakeResponse:
+            output = [FakeReasoning(), FakeMessage()]
+            output_parsed = StudentEvaluation(remarque="Très bon travail.")
+
+        result = _parse_evaluation_response(FakeResponse())
+
+        assert result is not None
+        assert result.remarque == "Très bon travail."
 
 
 class TestCalculateGeneralAverage:
