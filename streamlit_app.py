@@ -314,6 +314,14 @@ def _run_generation(
     return evaluations
 
 
+def _results_to_xlsx(results_df: pd.DataFrame) -> bytes:
+    """Serialize evaluation results to an Excel workbook."""
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        results_df.to_excel(writer, index=False, sheet_name="Remarques")
+    return buffer.getvalue()
+
+
 def main() -> None:
     """Fonction principale de l'application Streamlit."""
     st.title("📝 Génération de Remarques de Bulletins")
@@ -580,7 +588,7 @@ def main() -> None:
                         evaluations_for_class, columns=["Élève", "Remarque"]
                     )
 
-                    col1, col2 = st.columns(2)
+                    col1, col2, col3 = st.columns(3)
                     with col1:
                         text_content = "\n".join(
                             [
@@ -602,6 +610,18 @@ def main() -> None:
                             data=csv_content,
                             file_name=f"remarques_{selected_class}.csv",
                             mime="text/csv",
+                        )
+
+                    with col3:
+                        xlsx_content = _results_to_xlsx(results_df)
+                        st.download_button(
+                            label="📥 Télécharger (XLSX)",
+                            data=xlsx_content,
+                            file_name=f"remarques_{selected_class}.xlsx",
+                            mime=(
+                                "application/vnd.openxmlformats-officedocument."
+                                "spreadsheetml.sheet"
+                            ),
                         )
             else:
                 st.info(
