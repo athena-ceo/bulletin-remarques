@@ -6,6 +6,8 @@ pour les élèves de CPGE à partir d'un fichier Excel.
 
 from __future__ import annotations
 
+import hashlib
+import io
 import streamlit as st
 import pandas as pd
 import os
@@ -47,12 +49,10 @@ if "column_mappings" not in st.session_state:
     st.session_state.column_mappings = {}
 if "client" not in st.session_state:
     st.session_state.client = None
-if "generating" not in st.session_state:
-    st.session_state.generating = False
-if "current_class" not in st.session_state:
-    st.session_state.current_class = None
 if "uploaded_file_key" not in st.session_state:
     st.session_state.uploaded_file_key = None
+if "uploaded_file_bytes" not in st.session_state:
+    st.session_state.uploaded_file_bytes = None
 
 
 def _column_options(df: pd.DataFrame) -> List[str]:
@@ -180,6 +180,76 @@ def _apply_mapping(sheet_name: str, mapping: SheetColumnMapping) -> Tuple[bool, 
     return True, f"{len(valid_rows)} élève(s) valide(s)"
 
 
+def _load_excel_from_upload(uploaded_file) -> Tuple[pd.ExcelFile, str]:
+    """Load workbook bytes into session state using a stable content hash."""
+    file_bytes = uploaded_file.getvalue()
+    file_key = hashlib.sha256(file_bytes).hexdigest()
+
+    if st.session_state.get("uploaded_file_key") != file_key:
+        st.session_state.uploaded_file_key = file_key
+        st.session_state.uploaded_file_bytes = file_bytes
+        st.session_state.excel_raw = {}
+        st.session_state.excel_data = {}
+        st.session_state.column_mappings = {}
+        st.session_state.evaluations = {}
+
+        xl = pd.ExcelFile(io.BytesIO(file_bytes))
+        for sheet_name in xl.sheet_names:
+            df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet_name)
+            st.session_state.excel_raw[sheet_name] = df
+            detected = auto_detect_column_mapping(df, sheet_name)
+            _seed_mapping_widgets(detected)
+            st.session_state.column_mappings[sheet_name] = detected.to_dict()
+
+    file_bytes = st.session_state.uploaded_file_bytes
+    if file_bytes is None:
+        raise ValueError("Fichier Excel non disponible en mémoire.")
+    return pd.ExcelFile(io.BytesIO(file_bytes)), uploaded_file.name
+
+
+def _run_generation(
+    df: pd.DataFrame,
+    mapping: SheetColumnMapping,
+    client: OpenAI,
+    model: str,
+    max_students: Optional[int],
+) -> List[Tuple[str, str]]:
+    """Generate evaluations for all students in a single script run."""
+    evaluations: List[Tuple[str, str]] = []
+    rows_list = list(df.iterrows())
+    total_target = max_students if max_students else len(rows_list)
+    progress_bar = st.progress(0.0, text="Génération en cours...")
+    status = st.empty()
+    processed = 0
+
+    for _, row in rows_list:
+        if max_students is not None and processed >= max_students:
+            break
+
+        student_data = extract_student_data(row, mapping)
+        if student_data is None:
+            continue
+
+        student_name = f"{student_data['prenom']} {student_data['nom']}"
+        status.info(f"⏳ {processed + 1}/{total_target} — {student_name}")
+        try:
+            evaluation = generate_evaluation(client, student_data, model)
+        except Exception as e:
+            logging.error(f"Error for {student_name}: {e}", exc_info=True)
+            evaluation = f"[Erreur: {str(e)[:100]}]"
+
+        evaluations.append((student_name, evaluation))
+        processed += 1
+        progress_bar.progress(
+            processed / total_target,
+            text=f"{processed}/{total_target} élève(s)",
+        )
+
+    progress_bar.empty()
+    status.empty()
+    return evaluations
+
+
 def main() -> None:
     """Fonction principale de l'application Streamlit."""
     st.title("📝 Génération de Remarques de Bulletins")
@@ -260,26 +330,9 @@ def main() -> None:
 
     if uploaded_file is not None:
         try:
-            file_key = f"{uploaded_file.name}:{uploaded_file.size}"
-            if st.session_state.get("uploaded_file_key") != file_key:
-                xl = pd.ExcelFile(uploaded_file)
-                st.session_state.uploaded_file_key = file_key
-                st.session_state.excel_raw = {}
-                st.session_state.excel_data = {}
-                st.session_state.column_mappings = {}
-                st.session_state.evaluations = {}
-
-                for sheet_name in xl.sheet_names:
-                    df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
-                    st.session_state.excel_raw[sheet_name] = df
-                    detected = auto_detect_column_mapping(df, sheet_name)
-                    _seed_mapping_widgets(detected)
-                    st.session_state.column_mappings[sheet_name] = detected.to_dict()
-
-            xl = pd.ExcelFile(uploaded_file)
-            st.success(f"✅ Fichier chargé: {uploaded_file.name}")
+            xl, file_name = _load_excel_from_upload(uploaded_file)
+            st.success(f"✅ Fichier chargé: {file_name}")
             st.info(f"📋 Onglets trouvés: {', '.join(xl.sheet_names)}")
-
         except Exception as e:
             st.error(f"❌ Erreur lors de la lecture du fichier: {e}")
 
@@ -402,100 +455,35 @@ def main() -> None:
                     else:
                         max_students = None
 
-                if not st.session_state.generating:
-                    num_to_generate = max_students if max_students else len(df)
-                    if st.button(
-                        f"🚀 Générer pour {num_to_generate} élève(s)",
-                        type="primary",
-                        disabled=not st.session_state.client,
-                    ):
-                        st.session_state.generating = True
-                        st.session_state.current_class = selected_class
-                        st.session_state.current_student_idx = 0
-                        st.session_state.max_students_limit = max_students
-                        st.session_state.evaluations[selected_class] = []
-                        st.rerun()
-
+                num_to_generate = max_students if max_students else len(df)
+                if st.button(
+                    f"🚀 Générer pour {num_to_generate} élève(s)",
+                    type="primary",
+                    disabled=not st.session_state.client,
+                ):
                     if not st.session_state.client:
                         st.warning("⚠️ Configurez votre clé API dans la barre latérale")
-
-                if (
-                    st.session_state.generating
-                    and st.session_state.current_class == selected_class
-                ):
-                    df_gen = st.session_state.excel_data[st.session_state.current_class]
-                    current_idx = st.session_state.current_student_idx
-                    max_limit = st.session_state.max_students_limit
-                    evaluations = st.session_state.evaluations[
-                        st.session_state.current_class
-                    ]
-                    rows_list = list(df_gen.iterrows())
-
-                    should_continue = current_idx < len(rows_list) and (
-                        max_limit is None or len(evaluations) < max_limit
-                    )
-
-                    if should_continue:
-                        total_to_process = max_limit if max_limit else len(rows_list)
-                        st.progress(len(evaluations) / total_to_process)
-                        st.info(
-                            f"⏳ Génération en cours: {len(evaluations)}/{total_to_process}"
-                        )
-
-                        if evaluations:
-                            st.subheader("📝 Évaluations générées:")
-                            for i, (student_name, evaluation) in enumerate(
-                                evaluations, 1
-                            ):
-                                st.markdown(f"**{i}. {student_name}**")
-                                st.info(evaluation)
-                            st.divider()
-
-                        _, row = rows_list[current_idx]
-                        student_data = extract_student_data(row, current_mapping)
-
-                        if student_data:
-                            student_name = (
-                                f"{student_data['prenom']} {student_data['nom']}"
-                            )
-                            with st.spinner(f"Génération pour {student_name}..."):
-                                try:
-                                    evaluation = generate_evaluation(
-                                        st.session_state.client,
-                                        student_data,
-                                        model,
-                                    )
-                                except Exception as e:
-                                    logging.error(
-                                        f"Error for {student_name}: {e}",
-                                        exc_info=True,
-                                    )
-                                    evaluation = f"[Erreur: {str(e)[:100]}]"
-
-                            evaluations.append((student_name, evaluation))
-                            st.session_state.evaluations[
-                                st.session_state.current_class
-                            ] = evaluations
-                        else:
-                            st.warning(
-                                f"⚠️ Ligne {current_idx + 1} ignorée "
-                                f"(nom ou prénom manquant)"
-                            )
-
-                        st.session_state.current_student_idx += 1
-                        st.rerun()
                     else:
-                        st.session_state.generating = False
+                        evaluations = _run_generation(
+                            df,
+                            current_mapping,
+                            st.session_state.client,
+                            model,
+                            max_students,
+                        )
+                        st.session_state.evaluations[selected_class] = evaluations
                         st.success(
                             f"✅ Génération terminée! "
                             f"{len(evaluations)} évaluation(s) créée(s)."
                         )
-                        st.rerun()
+
+                if not st.session_state.client:
+                    st.warning("⚠️ Configurez votre clé API dans la barre latérale")
 
                 evaluations_for_class = st.session_state.evaluations.get(
                     selected_class, []
                 )
-                if evaluations_for_class and not st.session_state.generating:
+                if evaluations_for_class:
                     st.divider()
                     st.header("6. 📝 Résultats")
 
