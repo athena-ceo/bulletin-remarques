@@ -136,6 +136,67 @@ def _build_mapping_from_ui(
     return SheetColumnMapping(class_name=sheet_name, blocks=blocks)
 
 
+def _get_stored_mapping(sheet_name: str) -> SheetColumnMapping:
+    """Return the auto-detected mapping stored for a worksheet."""
+    return SheetColumnMapping.from_dict(
+        st.session_state.column_mappings.get(
+            sheet_name,
+            {"class_name": sheet_name, "blocks": []},
+        )
+    )
+
+
+def _widgets_out_of_sync(sheet_name: str, mapping: SheetColumnMapping) -> bool:
+    """Return True when mapping widgets do not match the stored mapping."""
+    if not mapping.blocks:
+        return False
+    block = mapping.blocks[0]
+    expected_main = block.main_exercise_col
+    actual_main = st.session_state.get(f"mapping_main_col_{sheet_name}_0", "")
+    return bool(expected_main) and actual_main != expected_main
+
+
+def _maybe_reseed_mapping_widgets(sheet_name: str) -> None:
+    """Refresh mapping widgets when switching to a worksheet."""
+    stored_mapping = _get_stored_mapping(sheet_name)
+    if stored_mapping.blocks and _widgets_out_of_sync(sheet_name, stored_mapping):
+        _seed_mapping_widgets(stored_mapping)
+
+
+def _effective_mapping(
+    sheet_name: str, ui_mapping: SheetColumnMapping
+) -> SheetColumnMapping:
+    """Prefer a complete UI mapping, otherwise fall back to auto-detect."""
+    is_ui_complete, _ = mapping_is_complete(ui_mapping)
+    if is_ui_complete:
+        return ui_mapping
+
+    stored_mapping = _get_stored_mapping(sheet_name)
+    is_stored_complete, _ = mapping_is_complete(stored_mapping)
+    if is_stored_complete:
+        return stored_mapping
+
+    return ui_mapping
+
+
+def _register_detected_mapping(
+    sheet_name: str, detected: SheetColumnMapping
+) -> Optional[str]:
+    """Store a detected mapping, seed widgets, and auto-apply when possible."""
+    _seed_mapping_widgets(detected)
+    st.session_state.column_mappings[sheet_name] = detected.to_dict()
+
+    is_complete, message = mapping_is_complete(detected)
+    if not is_complete:
+        return None
+
+    ok, apply_message = _apply_mapping(sheet_name, detected)
+    if ok:
+        return apply_message
+    logging.warning("Auto-application échouée pour %s: %s", sheet_name, apply_message)
+    return None
+
+
 def _seed_mapping_widgets(mapping: SheetColumnMapping) -> None:
     """Initialize widget defaults from a detected mapping."""
     sheet_name = mapping.class_name
@@ -194,12 +255,15 @@ def _load_excel_from_upload(uploaded_file) -> Tuple[pd.ExcelFile, str]:
         st.session_state.evaluations = {}
 
         xl = pd.ExcelFile(io.BytesIO(file_bytes))
+        applied_sheets: List[str] = []
         for sheet_name in xl.sheet_names:
             df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet_name)
             st.session_state.excel_raw[sheet_name] = df
             detected = auto_detect_column_mapping(df, sheet_name)
-            _seed_mapping_widgets(detected)
-            st.session_state.column_mappings[sheet_name] = detected.to_dict()
+            apply_message = _register_detected_mapping(sheet_name, detected)
+            if apply_message:
+                applied_sheets.append(f"{sheet_name} ({apply_message})")
+        st.session_state.auto_applied_sheets = applied_sheets
 
     file_bytes = st.session_state.uploaded_file_bytes
     if file_bytes is None:
@@ -333,6 +397,12 @@ def main() -> None:
             xl, file_name = _load_excel_from_upload(uploaded_file)
             st.success(f"✅ Fichier chargé: {file_name}")
             st.info(f"📋 Onglets trouvés: {', '.join(xl.sheet_names)}")
+            applied = st.session_state.get("auto_applied_sheets", [])
+            if applied:
+                st.success(
+                    "✅ Mapping auto-détecté et appliqué pour: "
+                    + ", ".join(applied)
+                )
         except Exception as e:
             st.error(f"❌ Erreur lors de la lecture du fichier: {e}")
 
@@ -349,24 +419,31 @@ def main() -> None:
 
         if selected_class:
             raw_df = st.session_state.excel_raw[selected_class]
+            _maybe_reseed_mapping_widgets(selected_class)
+            stored_mapping = _get_stored_mapping(selected_class)
 
             st.divider()
             st.header("3. 🧭 Correspondance des colonnes")
 
+            if stored_mapping.blocks:
+                block_summary = ", ".join(
+                    f"{block.label} ({block.main_exercise_col or '?'})"
+                    for block in stored_mapping.blocks
+                )
+                st.caption(f"Blocs détectés: {block_summary}")
+
             if st.button("🔍 Auto-détecter les colonnes", key=f"autodetect_{selected_class}"):
                 detected = auto_detect_column_mapping(raw_df, selected_class)
-                _seed_mapping_widgets(detected)
-                st.session_state.column_mappings[selected_class] = detected.to_dict()
+                apply_message = _register_detected_mapping(selected_class, detected)
+                if apply_message:
+                    st.success(f"✅ Mapping appliqué: {apply_message}")
+                else:
+                    is_complete, message = mapping_is_complete(detected)
+                    if not is_complete:
+                        st.warning(message)
                 st.rerun()
 
-            default_blocks = len(
-                SheetColumnMapping.from_dict(
-                    st.session_state.column_mappings.get(
-                        selected_class,
-                        {"class_name": selected_class, "blocks": []},
-                    )
-                ).blocks
-            )
+            default_blocks = max(1, len(stored_mapping.blocks))
             num_blocks = st.number_input(
                 "Nombre de blocs (CB / DST)",
                 min_value=1,
@@ -376,7 +453,8 @@ def main() -> None:
             )
 
             with st.expander("Configurer les blocs", expanded=True):
-                mapping = _build_mapping_from_ui(selected_class, raw_df, int(num_blocks))
+                ui_mapping = _build_mapping_from_ui(selected_class, raw_df, int(num_blocks))
+            mapping = _effective_mapping(selected_class, ui_mapping)
 
             apply_col, preview_col = st.columns([1, 2])
             with apply_col:
